@@ -23,62 +23,114 @@ def format_diff(diff_seconds):
     return f"{days}d {hours}h {minutes}m"
 
 def update_interval(task_id, interval_text):
-    # 从 /task/{task_id} 获取 custom fields，找到 Interval 1-2 并更新
-    res = requests.get(f"https://api.clickup.com/api/v2/task/{task_id}", headers=HEADERS)
-    if res.status_code != 200:
-        print("Failed to fetch task:", res.status_code, res.text)
-        return False
-    fields = res.json().get("custom_fields", [])
-    interval_field = next((f for f in fields if f["name"] == "Interval 1-2"), None)
-    if not interval_field:
-        print("找不到 Interval 1-2 custom field")
-        return False
+    try:
+        # 获取任务详情
+        res = requests.get(f"https://api.clickup.com/api/v2/task/{task_id}", headers=HEADERS)
+        if res.status_code != 200:
+            print(f"❌ Failed to fetch task for update: {res.status_code}")
+            return False
+            
+        fields = res.json().get("custom_fields", [])
+        
+        # 查找Interval字段
+        interval_field = None
+        for field in fields:
+            if field.get("name") in ["Interval 1-2", "Interval"]:
+                interval_field = field
+                break
+                
+        if not interval_field:
+            print("❌ Interval field not found. Available fields:")
+            for field in fields:
+                print(f"  - {field.get('name')} (ID: {field.get('id')})")
+            return False
 
-    field_id = interval_field["id"]
-    url = f"https://api.clickup.com/api/v2/task/{task_id}/field/{field_id}"
-    data = {"value": interval_text}
-    r = requests.post(url, headers=HEADERS, json=data)
-    print(f"Update Interval result: {r.status_code} {r.text}")
-    return r.status_code in (200, 201)
+        field_id = interval_field["id"]
+        url = f"https://api.clickup.com/api/v2/task/{task_id}/field/{field_id}"
+        data = {"value": interval_text}
+        
+        r = requests.post(url, headers=HEADERS, json=data)
+        print(f"📤 Update API response: {r.status_code} - {r.text}")
+        
+        return r.status_code in (200, 201)
+        
+    except Exception as e:
+        print(f"❌ Error in update_interval: {str(e)}")
+        return False
 
 @app.route("/clickup-webhook", methods=["POST"])
 def clickup_webhook():
     data = request.json
-    print("Webhook payload:", json.dumps(data, ensure_ascii=False))
-    # task id 可能在顶层 task_id 或者 data["task"]["id"]
-    task_id = data.get("task_id") or data.get("task", {}).get("id")
+    print("✅ Webhook received at /clickup-webhook")
+    print("📦 Full payload:", json.dumps(data, indent=2, ensure_ascii=False))
+
+    # 更可靠的task_id获取方式
+    task_id = data.get("task_id") or (data.get("task") and data.get("task").get("id"))
     if not task_id:
-        print("没有 task_id，忽略")
+        print("❌ No task_id found in payload")
         return jsonify({"error": "no task_id"}), 400
 
-    # 取任务详情（以防 payload 没带 custom_fields）
+    print(f"🎯 Processing task: {task_id}")
+
+    # 获取任务详情
     res = requests.get(f"https://api.clickup.com/api/v2/task/{task_id}", headers=HEADERS)
     if res.status_code != 200:
-        print("不能取得任务详情:", res.status_code, res.text)
+        print(f"❌ Failed to fetch task: {res.status_code} - {res.text}")
         return jsonify({"error": "fetch task failed"}), 500
+    
     task = res.json()
     fields = task.get("custom_fields", [])
+    
+    # 打印所有自定义字段用于调试
+    print("🔍 All custom fields:")
+    for field in fields:
+        print(f"  - {field.get('name')}: {field.get('value')} (type: {field.get('type')})")
+
+    # 查找需要的字段
     cf = {f["name"]: f for f in fields}
+    
+    # 使用你的实际字段名（注意可能没有emoji）
+    t1_date = cf.get("T1 Date", {}).get("value") or cf.get("📅 T1 Date", {}).get("value")
+    t2_date = cf.get("T2 Date", {}).get("value") or cf.get("📅 T2 Date", {}).get("value")
+    t2_check = cf.get("Touch 2", {}).get("value") or cf.get("✅ Touch 2", {}).get("value")
 
-    # 这里按你实际 custom field 名称改（包含 emoji）
-    t1 = cf.get("📅 T1 Date", {}).get("value")
-    t2 = cf.get("📅 T2 Date", {}).get("value")
-    t2check = cf.get("✅ Touch 2", {}).get("value", False)
+    print(f"📊 Field values - T1: {t1_date}, T2: {t2_date}, T2 Check: {t2_check}")
 
-    if t1 and t2 and t2check:
-        d1 = parse_date(t1)
-        d2 = parse_date(t2)
-        diff = int((d2 - d1).total_seconds())
-        interval = format_diff(diff)
-        ok = update_interval(task_id, interval)
-        if ok:
-            return jsonify({"ok": True, "interval": interval}), 200
+    # 检查条件
+    if not all([t1_date, t2_date]):
+        print("❌ Missing dates")
+        return jsonify({"error": "missing dates"}), 200
+        
+    if not t2_check:
+        print("❌ T2 not checked")
+        return jsonify({"error": "t2 not checked"}), 200
+
+    # 计算时间差
+    try:
+        d1 = parse_date(t1_date)
+        d2 = parse_date(t2_date)
+        diff_seconds = (d2 - d1).total_seconds()
+        
+        if diff_seconds < 0:
+            print("❌ Negative time difference")
+            return jsonify({"error": "negative time difference"}), 200
+            
+        interval = format_diff(diff_seconds)
+        print(f"⏱️ Calculated interval: {interval}")
+        
+        # 更新字段
+        success = update_interval(task_id, interval)
+        if success:
+            print("🎉 Successfully updated interval!")
+            return jsonify({"success": True, "interval": interval}), 200
         else:
-            return jsonify({"ok": False}), 500
-
-    print("数据不完整或 T2 未勾选")
-    return jsonify({"ignored": True}), 200
-
+            print("❌ Failed to update interval field")
+            return jsonify({"error": "update failed"}), 500
+            
+    except Exception as e:
+        print(f"❌ Error in calculation: {str(e)}")
+        return jsonify({"error": "calculation error"}), 500
+        
 @app.route("/")
 def home():
     return "ClickUp Webhook Server running", 200
