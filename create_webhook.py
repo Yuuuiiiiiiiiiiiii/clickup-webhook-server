@@ -12,6 +12,7 @@ headers = {"Authorization": CLICKUP_TOKEN, "Content-Type": "application/json"}
 data = {
     "endpoint": "https://clickup-webhook-server-xa5x.onrender.com/clickup-webhook",  # 改成你的 Render URL
     "events": ["taskUpdated"],
+    "list_id": "901811834458" 
 }
 
 url = f"https://api.clickup.com/api/v2/team/{TEAM_ID}/webhook"

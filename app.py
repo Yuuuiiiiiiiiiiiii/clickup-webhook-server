@@ -41,7 +41,7 @@ def update_interval(task_id, interval_text):
     print(f"Update Interval result: {r.status_code} {r.text}")
     return r.status_code in (200, 201)
 
-@app.route("/webhook", methods=["POST"])
+@app.route("/clickup-webhook", methods=["POST"])
 def clickup_webhook():
     data = request.json
     print("Webhook payload:", json.dumps(data, ensure_ascii=False))
@@ -84,4 +84,7 @@ def home():
     return "ClickUp Webhook Server running", 200
 
 if __name__ == "__main__":
-    app.run(host="0.0.0.0", port=int(os.getenv("PORT", "10000")))
+    from dotenv import load_dotenv
+    load_dotenv()  # ✅ 在部署环境中也加载 .env
+    port = int(os.environ.get("PORT", 10000))  # ✅ Render 自动注入 PORT
+    app.run(host="0.0.0.0", port=port)
