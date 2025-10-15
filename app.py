@@ -18,9 +18,9 @@ def parse_date(timestamp):
     return datetime.fromtimestamp(int(timestamp) / 1000, tz=timezone.utc)
 
 def format_diff(diff_seconds):
-    days = diff_seconds // 86400
-    hours = (diff_seconds % 86400) // 3600
-    minutes = (diff_seconds % 3600) // 60
+    days = int(diff_seconds // 86400)
+    hours = int((diff_seconds % 86400) // 3600)
+    minutes = int((diff_seconds % 3600) // 60)
     return f"{days}d {hours}h {minutes}m"
 
 def update_interval(task_id, interval_text):
