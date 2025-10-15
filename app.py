@@ -14,6 +14,27 @@ app = Flask(__name__)
 CLICKUP_TOKEN = os.getenv("CLICKUP_TOKEN")
 HEADERS = {"Authorization": CLICKUP_TOKEN}
 
+# 全局变量跟踪API调用频率
+last_api_call_time = 0
+MIN_API_INTERVAL = 1.5  # 最少1.5秒间隔
+
+def safe_api_call(api_function, *args, **kwargs):
+    """安全的API调用，自动处理速率限制"""
+    global last_api_call_time
+    
+    # 确保API调用间隔
+    current_time = time.time()
+    time_since_last_call = current_time - last_api_call_time
+    if time_since_last_call < MIN_API_INTERVAL:
+        sleep_time = MIN_API_INTERVAL - time_since_last_call
+        print(f"⏳ Rate limiting: waiting {sleep_time:.1f}s before API call")
+        time.sleep(sleep_time)
+    
+    last_api_call_time = time.time()
+    
+    # 执行API调用
+    return api_function(*args, **kwargs)
+
 def parse_date(timestamp):
     return datetime.fromtimestamp(int(timestamp) / 1000, tz=timezone.utc)
 
@@ -23,15 +44,34 @@ def format_diff(diff_seconds):
     minutes = int((diff_seconds % 3600) // 60)
     return f"{days}d {hours}h {minutes}m"
 
-def update_interval_field(task_id, field_name, interval_text):
+def get_task_with_fields(task_id):
+    """获取任务详情和字段信息"""
+    def _get_task():
+        return requests.get(f"https://api.clickup.com/api/v2/task/{task_id}", headers=HEADERS)
+    
+    response = safe_api_call(_get_task)
+    
+    if response.status_code == 429:
+        print("🚫 Rate limit hit, will retry after delay")
+        return None, "rate_limit"
+    elif response.status_code != 200:
+        print(f"❌ Failed to fetch task: {response.status_code}")
+        return None, "error"
+    
+    task = response.json()
+    fields = task.get("custom_fields", [])
+    return task, fields
+
+def update_interval_field(task_id, field_name, interval_text, fields_cache=None):
+    """更新Interval字段，可复用字段缓存"""
     try:
-        # 获取任务详情
-        res = requests.get(f"https://api.clickup.com/api/v2/task/{task_id}", headers=HEADERS)
-        if res.status_code != 200:
-            print(f"❌ Failed to fetch task for update: {res.status_code}")
-            return False
-            
-        fields = res.json().get("custom_fields", [])
+        # 如果提供了字段缓存，直接使用；否则重新获取
+        if fields_cache is None:
+            task, fields = get_task_with_fields(task_id)
+            if task is None:
+                return False
+        else:
+            fields = fields_cache
         
         # 查找指定的Interval字段
         interval_field = None
@@ -45,13 +85,23 @@ def update_interval_field(task_id, field_name, interval_text):
             return False
 
         field_id = interval_field["id"]
-        url = f"https://api.clickup.com/api/v2/task/{task_id}/field/{field_id}"
-        data = {"value": interval_text}
         
-        r = requests.post(url, headers=HEADERS, json=data)
-        print(f"📤 Updated {field_name}: {r.status_code} - {r.text}")
+        def _update_field():
+            url = f"https://api.clickup.com/api/v2/task/{task_id}/field/{field_id}"
+            data = {"value": interval_text}
+            return requests.post(url, headers=HEADERS, json=data)
         
-        return r.status_code in (200, 201)
+        r = safe_api_call(_update_field)
+        
+        if r.status_code == 429:
+            print(f"🚫 Rate limit while updating {field_name}, will retry later")
+            return False
+        elif r.status_code in (200, 201):
+            print(f"✅ Updated {field_name}: {interval_text}")
+            return True
+        else:
+            print(f"❌ Failed to update {field_name}: {r.status_code} - {r.text}")
+            return False
         
     except Exception as e:
         print(f"❌ Error updating {field_name}: {str(e)}")
@@ -77,25 +127,33 @@ def clickup_webhook():
                 return field_dict[name].get("value")
         return None
 
-    # 处理自动化延迟的重试机制
-    max_retries = 3
-    retry_delay = 2  # 秒
+    # 更保守的重试策略
+    max_retries = 2  # 减少重试次数
+    retry_delay = 3  # 增加重试间隔
 
     # 初始化所有字段变量
     t1_date = t2_date = t3_date = t4_date = None
     t2_check = t3_check = t4_check = None
+    fields_cache = None  # 缓存字段信息
 
     for attempt in range(max_retries):
-        # 获取任务详情（每次重试都重新获取）
-        res = requests.get(f"https://api.clickup.com/api/v2/task/{task_id}", headers=HEADERS)
-        if res.status_code != 200:
-            print(f"❌ Failed to fetch task on attempt {attempt}: {res.status_code}")
-            break
-            
-        task = res.json()
-        fields = task.get("custom_fields", [])
+        # 获取任务详情（使用安全的API调用）
+        task, fields = get_task_with_fields(task_id)
         
-        # 打印所有自定义字段用于调试（只在第一次尝试时打印）
+        if task is None:
+            if attempt < max_retries - 1:
+                print(f"⏳ API call failed, waiting {retry_delay}s before retry...")
+                time.sleep(retry_delay)
+                continue
+            else:
+                print("❌ Failed to fetch task after all retries")
+                return jsonify({"error": "fetch task failed"}), 200
+        
+        # 缓存字段信息供后续使用
+        if fields_cache is None:
+            fields_cache = fields
+        
+        # 只在第一次尝试时打印字段详情
         if attempt == 0:
             print("🔍 All custom fields:")
             for field in fields:
@@ -149,7 +207,7 @@ def clickup_webhook():
             
             if diff_seconds >= 0:
                 interval_12 = format_diff(diff_seconds)
-                success = update_interval_field(task_id, "Interval 1-2", interval_12)
+                success = update_interval_field(task_id, "Interval 1-2", interval_12, fields_cache)
                 if success:
                     results["interval_1_2"] = interval_12
                     print(f"🎉 Updated Interval 1-2: {interval_12}")
@@ -164,7 +222,7 @@ def clickup_webhook():
             
             if diff_seconds >= 0:
                 interval_23 = format_diff(diff_seconds)
-                success = update_interval_field(task_id, "Interval 2-3", interval_23)
+                success = update_interval_field(task_id, "Interval 2-3", interval_23, fields_cache)
                 if success:
                     results["interval_2_3"] = interval_23
                     print(f"🎉 Updated Interval 2-3: {interval_23}")
@@ -179,7 +237,7 @@ def clickup_webhook():
             
             if diff_seconds >= 0:
                 interval_34 = format_diff(diff_seconds)
-                success = update_interval_field(task_id, "Interval 3-4", interval_34)
+                success = update_interval_field(task_id, "Interval 3-4", interval_34, fields_cache)
                 if success:
                     results["interval_3_4"] = interval_34
                     print(f"🎉 Updated Interval 3-4: {interval_34}")
