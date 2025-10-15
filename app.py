@@ -3,6 +3,7 @@ from flask import Flask, request, jsonify
 import requests
 import os
 import json
+import time
 from datetime import datetime, timezone
 from dotenv import load_dotenv
 
@@ -72,38 +73,66 @@ def clickup_webhook():
 
     print(f"🎯 Processing task: {task_id}")
 
-    # 获取任务详情
-    res = requests.get(f"https://api.clickup.com/api/v2/task/{task_id}", headers=HEADERS)
-    if res.status_code != 200:
-        print(f"❌ Failed to fetch task: {res.status_code} - {res.text}")
-        return jsonify({"error": "fetch task failed"}), 500
-    
-    task = res.json()
-    fields = task.get("custom_fields", [])
-    
-    # 打印所有自定义字段用于调试
-    print("🔍 All custom fields:")
-    for field in fields:
-        print(f"  - {field.get('name')}: {field.get('value')} (type: {field.get('type')})")
+    # 更智能的字段匹配函数
+    def get_field_value(field_dict, possible_names):
+        for name in possible_names:
+            if name in field_dict:
+                return field_dict[name].get("value")
+        return None
 
-    # 查找需要的字段
-    cf = {f["name"]: f for f in fields}
-    
-    # 使用你的实际字段名（注意可能没有emoji）
-    t1_date = cf.get("T1 Date", {}).get("value") or cf.get("📅 T1 Date", {}).get("value")
-    t2_date = cf.get("T2 Date", {}).get("value") or cf.get("📅 T2 Date", {}).get("value")
-    t2_check = cf.get("Touch 2", {}).get("value") or cf.get("✅ Touch 2", {}).get("value")
+    # 处理自动化延迟的重试机制
+    max_retries = 3
+    retry_delay = 2  # 秒
 
-    print(f"📊 Field values - T1: {t1_date}, T2: {t2_date}, T2 Check: {t2_check}")
+    t1_date = None
+    t2_date = None
+    t2_check = None
 
-    # 检查条件
-    if not all([t1_date, t2_date]):
-        print("❌ Missing dates")
-        return jsonify({"error": "missing dates"}), 200
+    for attempt in range(max_retries):
+        # 获取任务详情（每次重试都重新获取）
+        res = requests.get(f"https://api.clickup.com/api/v2/task/{task_id}", headers=HEADERS)
+        if res.status_code != 200:
+            print(f"❌ Failed to fetch task on attempt {attempt}: {res.status_code}")
+            break
+            
+        task = res.json()
+        fields = task.get("custom_fields", [])
         
-    if not t2_check:
-        print("❌ T2 not checked")
-        return jsonify({"error": "t2 not checked"}), 200
+        # 打印所有自定义字段用于调试（只在第一次尝试时打印）
+        if attempt == 0:
+            print("🔍 All custom fields:")
+            for field in fields:
+                print(f"  - {field.get('name')}: {field.get('value')} (type: {field.get('type')})")
+
+        cf = {f["name"]: f for f in fields}
+        
+        # 尝试多种可能的字段名称
+        t1_date = get_field_value(cf, ["📅 T1 Date", "T1 Date", "📅 T1 Date "])
+        t2_date = get_field_value(cf, ["📅 T2 Date ", "📅 T2 Date", "T2 Date", "T2 Date "])
+        t2_check = get_field_value(cf, ["✅ Touch 2", "Touch 2", "✅ Touch 2 "])
+
+        print(f"🔍 Attempt {attempt+1}: T1={t1_date}, T2={t2_date}, T2 Check={t2_check}")
+
+        # 检查是否所有条件都满足
+        if t1_date and t2_date and t2_check:
+            print("✅ All conditions met! Proceeding with calculation...")
+            break
+            
+        # 如果条件不满足，等待后重试
+        if attempt < max_retries - 1:
+            print(f"⏳ Conditions not met, waiting {retry_delay}s before retry...")
+            time.sleep(retry_delay)
+    else:
+        # 如果所有重试都失败了
+        if not t1_date:
+            print("❌ T1 Date is missing after all retries")
+            return jsonify({"error": "T1 date missing"}), 200
+        if not t2_date:
+            print("❌ T2 Date is missing after all retries")
+            return jsonify({"error": "T2 date missing"}), 200
+        if not t2_check:
+            print("❌ T2 is not checked after all retries")
+            return jsonify({"error": "T2 not checked"}), 200
 
     # 计算时间差
     try:
@@ -130,7 +159,7 @@ def clickup_webhook():
     except Exception as e:
         print(f"❌ Error in calculation: {str(e)}")
         return jsonify({"error": "calculation error"}), 500
-        
+
 @app.route("/")
 def home():
     return "ClickUp Webhook Server running", 200
