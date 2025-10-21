@@ -162,13 +162,13 @@ def clickup_webhook():
         cf = {f["name"]: f for f in fields}
         
         # 获取所有需要的字段
-        t1_date = get_field_value(cf, ["📅 T1 Date", "T1 Date", "📅 T1 Date "])
+        t1_date = get_field_value(cf, ["📅 T1 Date ", "📅 T1 Date", "T1 Date", "T1 Date "])
         t2_date = get_field_value(cf, ["📅 T2 Date ", "📅 T2 Date", "T2 Date", "T2 Date "])
         t3_date = get_field_value(cf, ["📅 T3 Date ", "📅 T3 Date", "T3 Date", "T3 Date "])
         t4_date = get_field_value(cf, ["📅 T4 Date ", "📅 T4 Date", "T4 Date", "T4 Date "])
-        t2_check = get_field_value(cf, ["✅ Touch 2", "Touch 2", "✅ Touch 2 "])
-        t3_check = get_field_value(cf, ["✅ Touch 3", "Touch 3", "✅ Touch 3 "])
-        t4_check = get_field_value(cf, ["✅ Touch 4", "Touch 4", "✅ Touch 4 "])
+        t2_check = get_field_value(cf, ["✅ Touch 2", "Touch 2", "✅ Touch 2 ", " Touch 2"])
+        t3_check = get_field_value(cf, ["✅ Touch 3", "Touch 3", "✅ Touch 3 ", " Touch 3"])
+        t4_check = get_field_value(cf, ["✅ Touch 4", "Touch 4", "✅ Touch 4 ", " Touch 4"])
 
         print(f"🔍 Attempt {attempt+1}: T1={t1_date}, T2={t2_date}, T3={t3_date}, T4={t4_date}")
         print(f"🔍 Attempt {attempt+1}: T2 Check={t2_check}, T3 Check={t3_check}, T4 Check={t4_check}")
