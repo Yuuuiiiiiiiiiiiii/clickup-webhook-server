@@ -22,7 +22,6 @@ def safe_api_call(api_function, *args, **kwargs):
     """安全的API调用，自动处理速率限制"""
     global last_api_call_time
     
-    # 确保API调用间隔
     current_time = time.time()
     time_since_last_call = current_time - last_api_call_time
     if time_since_last_call < MIN_API_INTERVAL:
@@ -31,8 +30,6 @@ def safe_api_call(api_function, *args, **kwargs):
         time.sleep(sleep_time)
     
     last_api_call_time = time.time()
-    
-    # 执行API调用
     return api_function(*args, **kwargs)
 
 def parse_date(timestamp):
@@ -63,9 +60,8 @@ def get_task_with_fields(task_id):
     return task, fields
 
 def update_interval_field(task_id, field_name, interval_text, fields_cache=None):
-    """更新Interval字段，可复用字段缓存"""
+    """更新Interval字段"""
     try:
-        # 如果提供了字段缓存，直接使用；否则重新获取
         if fields_cache is None:
             task, fields = get_task_with_fields(task_id)
             if task is None:
@@ -73,12 +69,10 @@ def update_interval_field(task_id, field_name, interval_text, fields_cache=None)
         else:
             fields = fields_cache
         
-        # 只查找特定的Interval字段
+        # 查找Interval字段
         interval_field = None
-        target_field_names = ["Interval 1-2", "Interval 2-3", "Interval 3-4"]
-        
         for field in fields:
-            if field.get("name") in target_field_names and field.get("name") == field_name:
+            if field.get("name") == field_name:
                 interval_field = field
                 break
                 
@@ -109,45 +103,12 @@ def update_interval_field(task_id, field_name, interval_text, fields_cache=None)
         print(f"❌ Error updating {field_name}: {str(e)}")
         return False
 
-def extract_key_fields(fields):
-    """只提取关键的12个字段，大幅减少处理时间"""
-    key_fields = {}
-    
-    # 定义我们关心的字段名称模式
-    date_patterns = ["T1 Date", "T2 Date", "T3 Date", "T4 Date"]
-    touch_patterns = ["Touch 1", "Touch 2", "Touch 3", "Touch 4"]
-    interval_patterns = ["Interval 1-2", "Interval 2-3", "Interval 3-4"]
-    
-    for field in fields:
-        field_name = field.get("name", "")
-        field_value = field.get("value")
-        
-        # 检查是否是日期字段
-        for pattern in date_patterns:
-            if pattern in field_name:
-                key_fields[field_name] = field
-                break
-                
-        # 检查是否是Touch字段
-        for pattern in touch_patterns:
-            if pattern in field_name:
-                key_fields[field_name] = field
-                break
-                
-        # 检查是否是Interval字段
-        for pattern in interval_patterns:
-            if pattern in field_name:
-                key_fields[field_name] = field
-                break
-    
-    return key_fields
-
 @app.route("/clickup-webhook", methods=["POST"])
 def clickup_webhook():
     data = request.json
     print("✅ Webhook received at /clickup-webhook")
 
-    # 更可靠的task_id获取方式
+    # 获取task_id
     task_id = data.get("task_id") or (data.get("task") and data.get("task").get("id"))
     if not task_id:
         print("❌ No task_id found in payload")
@@ -155,25 +116,25 @@ def clickup_webhook():
 
     print(f"🎯 Processing task: {task_id}")
 
-    # 更智能的字段匹配函数
+    # 字段匹配函数
     def get_field_value(field_dict, possible_names):
         for name in possible_names:
             if name in field_dict:
                 return field_dict[name].get("value")
         return None
 
-    # 更保守的重试策略
-    max_retries = 2  # 减少重试次数
-    retry_delay = 3  # 增加重试间隔
+    # 重试机制
+    max_retries = 2
+    retry_delay = 3
 
-    # 初始化所有字段变量
+    # 初始化字段变量
     t1_date = t2_date = t3_date = t4_date = None
     t2_check = t3_check = t4_check = None
-    key_fields_cache = None  # 只缓存关键字段
+    fields_cache = None
 
     for attempt in range(max_retries):
-        # 获取任务详情（使用安全的API调用）
-        task, all_fields = get_task_with_fields(task_id)
+        # 获取任务详情
+        task, fields = get_task_with_fields(task_id)
         
         if task is None:
             if attempt < max_retries - 1:
@@ -184,32 +145,26 @@ def clickup_webhook():
                 print("❌ Failed to fetch task after all retries")
                 return jsonify({"error": "fetch task failed"}), 200
         
-        # 只提取关键字段，大幅减少处理数据量
-        key_fields = extract_key_fields(all_fields)
+        # 缓存字段信息
+        if fields_cache is None:
+            fields_cache = fields
         
-        # 缓存关键字段信息供后续使用
-        if key_fields_cache is None:
-            key_fields_cache = key_fields
+        # 创建字段字典
+        cf = {f["name"]: f for f in fields}
         
-        # 只在第一次尝试时打印关键字段详情
-        if attempt == 0:
-            print(f"🔍 Found {len(key_fields)} key fields:")
-            for field_name, field_data in key_fields.items():
-                print(f"  - {field_name}: {field_data.get('value')}")
-
-        # 获取所有需要的字段 - 只从关键字段中查找
-        t1_date = get_field_value(key_fields, ["📅 T1 Date ", "📅 T1 Date", "T1 Date", "T1 Date "])
-        t2_date = get_field_value(key_fields, ["📅 T2 Date ", "📅 T2 Date", "T2 Date", "T2 Date "])
-        t3_date = get_field_value(key_fields, ["📅 T3 Date ", "📅 T3 Date", "T3 Date", "T3 Date "])
-        t4_date = get_field_value(key_fields, ["📅 T4 Date ", "📅 T4 Date", "T4 Date", "T4 Date "])
-        t2_check = get_field_value(key_fields, ["✅ Touch 2", "Touch 2", "✅ Touch 2 ", " Touch 2"])
-        t3_check = get_field_value(key_fields, ["✅ Touch 3", "Touch 3", "✅ Touch 3 ", " Touch 3"])
-        t4_check = get_field_value(key_fields, ["✅ Touch 4", "Touch 4", "✅ Touch 4 ", " Touch 4"])
+        # 获取字段值 - 使用确认能工作的字段名称
+        t1_date = get_field_value(cf, ["📅 T1 Date", "T1 Date", "📅 T1 Date "])
+        t2_date = get_field_value(cf, ["📅 T2 Date", "T2 Date", "📅 T2 Date "]) 
+        t3_date = get_field_value(cf, ["📅 T3 Date", "T3 Date", "📅 T3 Date "])
+        t4_date = get_field_value(cf, ["📅 T4 Date", "T4 Date", "📅 T4 Date "])
+        t2_check = get_field_value(cf, ["✅ Touch 2", "Touch 2", "✅ Touch 2 "])
+        t3_check = get_field_value(cf, ["✅ Touch 3", "Touch 3", "✅ Touch 3 "])
+        t4_check = get_field_value(cf, ["✅ Touch 4", "Touch 4", "✅ Touch 4 "])
 
         print(f"🔍 Attempt {attempt+1}: T1={t1_date}, T2={t2_date}, T3={t3_date}, T4={t4_date}")
         print(f"🔍 Attempt {attempt+1}: T2 Check={t2_check}, T3 Check={t3_check}, T4 Check={t4_check}")
 
-        # 检查是否有任何一个条件满足
+        # 检查条件
         conditions_met = False
         if t2_check and t1_date and t2_date:
             conditions_met = True
@@ -222,20 +177,18 @@ def clickup_webhook():
             print("✅ Conditions met! Proceeding with calculations...")
             break
             
-        # 如果条件不满足，等待后重试
         if attempt < max_retries - 1:
             print(f"⏳ Conditions not met, waiting {retry_delay}s before retry...")
             time.sleep(retry_delay)
     else:
-        # 如果所有重试都失败了
         print("❌ No valid conditions met after all retries")
         return jsonify({"ignored": True}), 200
 
-    # 计算并更新所有满足条件的Intervals
+    # 计算并更新Intervals
     results = {}
     
     try:
-        # Interval 1-2: T2 Date - T1 Date (当Touch 2勾选时)
+        # Interval 1-2
         if t2_check and t1_date and t2_date:
             d1 = parse_date(t1_date)
             d2 = parse_date(t2_date)
@@ -243,14 +196,12 @@ def clickup_webhook():
             
             if diff_seconds >= 0:
                 interval_12 = format_diff(diff_seconds)
-                success = update_interval_field(task_id, "Interval 1-2", interval_12, key_fields_cache)
+                success = update_interval_field(task_id, "Interval 1-2", interval_12, fields_cache)
                 if success:
                     results["interval_1_2"] = interval_12
                     print(f"🎉 Updated Interval 1-2: {interval_12}")
-                else:
-                    print("❌ Failed to update Interval 1-2")
         
-        # Interval 2-3: T3 Date - T2 Date (当Touch 3勾选时)
+        # Interval 2-3
         if t3_check and t2_date and t3_date:
             d2 = parse_date(t2_date)
             d3 = parse_date(t3_date)
@@ -258,14 +209,12 @@ def clickup_webhook():
             
             if diff_seconds >= 0:
                 interval_23 = format_diff(diff_seconds)
-                success = update_interval_field(task_id, "Interval 2-3", interval_23, key_fields_cache)
+                success = update_interval_field(task_id, "Interval 2-3", interval_23, fields_cache)
                 if success:
                     results["interval_2_3"] = interval_23
                     print(f"🎉 Updated Interval 2-3: {interval_23}")
-                else:
-                    print("❌ Failed to update Interval 2-3")
         
-        # Interval 3-4: T4 Date - T3 Date (当Touch 4勾选时)
+        # Interval 3-4
         if t4_check and t3_date and t4_date:
             d3 = parse_date(t3_date)
             d4 = parse_date(t4_date)
@@ -273,12 +222,10 @@ def clickup_webhook():
             
             if diff_seconds >= 0:
                 interval_34 = format_diff(diff_seconds)
-                success = update_interval_field(task_id, "Interval 3-4", interval_34, key_fields_cache)
+                success = update_interval_field(task_id, "Interval 3-4", interval_34, fields_cache)
                 if success:
                     results["interval_3_4"] = interval_34
                     print(f"🎉 Updated Interval 3-4: {interval_34}")
-                else:
-                    print("❌ Failed to update Interval 3-4")
                     
         if results:
             return jsonify({"success": True, "results": results}), 200
