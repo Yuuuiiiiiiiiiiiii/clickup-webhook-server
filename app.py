@@ -120,6 +120,7 @@ def extract_key_fields(fields):
     
     for field in fields:
         field_name = field.get("name", "")
+        field_value = field.get("value")
         
         # 检查是否是日期字段
         for pattern in date_patterns:
@@ -192,9 +193,9 @@ def clickup_webhook():
         
         # 只在第一次尝试时打印关键字段详情
         if attempt == 0:
-            print("🔍 Key fields only (12 fields):")
+            print(f"🔍 Found {len(key_fields)} key fields:")
             for field_name, field_data in key_fields.items():
-                print(f"  - {field_name}: {field_data.get('value')} (type: {field_data.get('type')})")
+                print(f"  - {field_name}: {field_data.get('value')}")
 
         # 获取所有需要的字段 - 只从关键字段中查找
         t1_date = get_field_value(key_fields, ["📅 T1 Date ", "📅 T1 Date", "T1 Date", "T1 Date "])
