@@ -1,4 +1,4 @@
-# app.py
+# app_fixed.py - 修复版本
 from flask import Flask, request, jsonify
 import requests
 import os
@@ -120,7 +120,7 @@ def calculate_all_intervals(task_id):
         update_interval_field(task_id, "Interval 3-4", "")
 
 def handle_order_client_linking(task_id):
-    """处理Order Record的客户链接"""
+    """处理Order Record的客户链接 - 修复版本"""
     print(f"🔗 Processing client linking for Order Record: {task_id}")
     
     res = requests.get(f"https://api.clickup.com/api/v2/task/{task_id}", headers=HEADERS)
@@ -140,15 +140,15 @@ def handle_order_client_linking(task_id):
         field_name = field.get("name", "")
         field_value = field.get("value")
         field_id = field.get("id")
-        print(f"   - {field_name}: {field_value} (ID: {field_id})")
+        print(f"   - '{field_name}': {field_value} (ID: {field_id})")
         
-        # 匹配👤 Client Name字段
-        if "👤 Client Name" in field_name or "Client Name" in field_name:
+        # 匹配👤 Client Name字段 - 只匹配有emoji的
+        if "👤 Client Name" == field_name:
             client_name = field_value
             print(f"📝 Found Client Name: {client_name}")
             
-        # 匹配👤 Client关系字段
-        elif "👤 Client" == field_name or "Client" == field_name:
+        # 匹配👤 Client关系字段 - 只匹配有emoji的
+        elif "👤 Client" == field_name:
             client_field_id = field_id
             print(f"🆔 Found Client relationship field ID: {client_field_id}")
     
@@ -183,26 +183,47 @@ def handle_order_client_linking(task_id):
                 print(f"✅ Exact match found: '{customer_name}' -> {customer_task.get('id')}")
                 break
         
-        # 如果没有精确匹配，尝试部分匹配
-        if not matched_task:
-            for customer_task in customer_tasks:
-                customer_name = customer_task.get("name", "").strip()
-                if client_name.strip().lower() in customer_name.lower():
-                    matched_task = customer_task
-                    print(f"✅ Partial match found: '{customer_name}' -> {customer_task.get('id')}")
-                    break
-        
         if matched_task:
             client_task_id = matched_task.get("id")
-            # 更新关系字段
+            
+            # 更新关系字段 - 添加详细的调试信息
             update_url = f"https://api.clickup.com/api/v2/task/{task_id}/field/{client_field_id}"
-            update_data = {"value": [{"id": client_task_id}]}
+            update_data = {
+                "value": [
+                    {
+                        "id": client_task_id,
+                        "name": matched_task.get("name"),
+                    }
+                ]
+            }
+            
+            print(f"🔄 Updating relationship field...")
+            print(f"   URL: {update_url}")
+            print(f"   Data: {json.dumps(update_data, indent=2)}")
+            
             update_res = requests.post(update_url, headers=HEADERS, json=update_data)
             
-            if update_res.status_code in (200, 201):
-                print(f"🎉 Successfully linked client: '{client_name}' -> {client_task_id}")
+            print(f"📡 Update response status: {update_res.status_code}")
+            if update_res.status_code not in (200, 201):
+                print(f"❌ Update failed: {update_res.text}")
             else:
-                print(f"❌ Failed to link client: {update_res.status_code} - {update_res.text}")
+                print(f"✅ Update successful!")
+                
+            # 验证更新是否成功
+            verify_res = requests.get(f"https://api.clickup.com/api/v2/task/{task_id}", headers=HEADERS)
+            if verify_res.status_code == 200:
+                verify_task = verify_res.json()
+                verify_fields = verify_task.get("custom_fields", [])
+                for field in verify_fields:
+                    if field.get("id") == client_field_id:
+                        linked_value = field.get("value")
+                        print(f"🔍 Verification - 👤 Client field value: {linked_value}")
+                        if linked_value and len(linked_value) > 0:
+                            print(f"🎉 SUCCESS! Client linked: {linked_value[0].get('id')}")
+                        else:
+                            print(f"❌ Client field is still empty after update!")
+                        break
+                
         else:
             print(f"❌ No matching client found in Customer List for: '{client_name}'")
             
@@ -238,6 +259,7 @@ def clickup_webhook():
     # 获取任务详情来判断是哪个列表
     res = requests.get(f"https://api.clickup.com/api/v2/task/{task_id}", headers=HEADERS)
     if res.status_code != 200:
+        print(f"❌ Failed to fetch task: {res.status_code}")
         return jsonify({"error": "fetch failed"}), 500
         
     task = res.json()
