@@ -1,4 +1,4 @@
-# app_clean_fix.py
+# app_fixed.py - 修复版本
 from flask import Flask, request, jsonify
 import requests
 import os
@@ -28,7 +28,7 @@ def format_diff(diff_seconds):
     return f"{days}d {hours}h {minutes}m"
 
 def update_interval_field(task_id, field_name, interval_text):
-    """更新Interval字段 - 完全保持原样"""
+    """更新Interval字段"""
     try:
         res = requests.get(f"https://api.clickup.com/api/v2/task/{task_id}", headers=HEADERS)
         if res.status_code != 200:
@@ -68,7 +68,7 @@ def update_interval_field(task_id, field_name, interval_text):
         return False
 
 def calculate_all_intervals(task_id):
-    """计算所有可能的间隔 - 完全保持原样"""
+    """计算所有可能的间隔"""
     res = requests.get(f"https://api.clickup.com/api/v2/task/{task_id}", headers=HEADERS)
     if res.status_code != 200:
         print(f"❌ Failed to fetch task: {res.status_code}")
@@ -163,7 +163,7 @@ def handle_order_client_linking(task_id):
     print(f"🎯 Looking for client: '{client_name}' in Customer List")
     
     # 在Customer List中查找匹配的客户（按任务名称匹配）
-    CUSTOMER_LIST_ID = "901811834458"
+    CUSTOMER_LIST_ID = "901811834458"  # 你的Customer List ID
     
     # 搜索Customer List中的所有任务
     search_url = f"https://api.clickup.com/api/v2/list/{CUSTOMER_LIST_ID}/task"
@@ -186,15 +186,20 @@ def handle_order_client_linking(task_id):
         if matched_task:
             client_task_id = matched_task.get("id")
             
-            # 更新关系字段 - 使用正确的格式
+            # 更新关系字段 - 添加详细的调试信息
             update_url = f"https://api.clickup.com/api/v2/task/{task_id}/field/{client_field_id}"
-            
-            # 关系字段的正确格式：包含任务ID的数组
-            update_data = {"value": [client_task_id]}
+            update_data = {
+                "value": [
+                    {
+                        "id": client_task_id,
+                        "name": matched_task.get("name"),
+                    }
+                ]
+            }
             
             print(f"🔄 Updating relationship field...")
             print(f"   URL: {update_url}")
-            print(f"   Data: {json.dumps(update_data)}")
+            print(f"   Data: {json.dumps(update_data, indent=2)}")
             
             update_res = requests.post(update_url, headers=HEADERS, json=update_data)
             
@@ -214,7 +219,7 @@ def handle_order_client_linking(task_id):
                         linked_value = field.get("value")
                         print(f"🔍 Verification - 👤 Client field value: {linked_value}")
                         if linked_value and len(linked_value) > 0:
-                            print(f"🎉 SUCCESS! Client linked: {linked_value[0]}")
+                            print(f"🎉 SUCCESS! Client linked: {linked_value[0].get('id')}")
                         else:
                             print(f"❌ Client field is still empty after update!")
                         break
@@ -222,6 +227,13 @@ def handle_order_client_linking(task_id):
         else:
             print(f"❌ No matching client found in Customer List for: '{client_name}'")
             
+            # 打印前几个客户名称用于调试
+            print("📋 Available clients in Customer List:")
+            for i, customer_task in enumerate(customer_tasks[:10]):  # 只显示前10个
+                print(f"   {i+1}. {customer_task.get('name')}")
+            if len(customer_tasks) > 10:
+                print(f"   ... and {len(customer_tasks) - 10} more")
+                
     else:
         print(f"❌ Failed to search Customer List: {search_res.status_code}")
 
