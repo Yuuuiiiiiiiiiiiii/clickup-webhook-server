@@ -156,7 +156,7 @@ def verify_update(task_id, client_field_id, expected_client_id):
         return False
 
 def handle_order_client_linking(task_id):
-    """处理Order Record的客户链接 - 使用批量更新方法"""
+    """处理Order Record的客户链接 - 修复版本"""
     print(f"🔗 Processing client linking for Order Record: {task_id}")
     
     res = requests.get(f"https://api.clickup.com/api/v2/task/{task_id}", headers=HEADERS)
@@ -245,35 +245,40 @@ def handle_order_client_linking(task_id):
             print(f"   URL: {update_url}")
             print(f"   Data: {json.dumps(update_data, indent=2)}")
             
-            update_res = requests.put(update_url, headers=HEADERS, json=update_data)
-            print(f"📡 Method 1 response status: {update_res.status_code}")
-            print(f"📡 Method 1 response content: {update_res.text}")
-            
-            if update_res.status_code in (200, 201):
-                print(f"✅ Method 1 update successful!")
+            try:
+                update_res = requests.put(update_url, headers=HEADERS, json=update_data)
+                print(f"📡 Method 1 response status: {update_res.status_code}")
+                print(f"📡 Method 1 response content: {update_res.text}")
                 
-                # 验证更新
-                verify_update(task_id, client_field_id, client_task_id)
-            else:
-                # 方法2: 使用字段更新端点，但尝试不同的数据格式
-                print("🔄 Trying method 2: Using field update endpoint with simplified data format")
-                field_update_url = f"https://api.clickup.com/api/v2/task/{task_id}/field/{client_field_id}"
-                
-                # 尝试最简单的格式
-                field_update_data = {"value": [client_task_id]}
-                
-                print(f"   URL: {field_update_url}")
-                print(f"   Data: {json.dumps(field_update_data)}")
-                
-                field_update_res = requests.post(field_update_url, headers=HEADERS, json=field_update_data)
-                print(f"📡 Method 2 response status: {field_update_res.status_code}")
-                print(f"📡 Method 2 response content: {field_update_res.text}")
-                
-                if field_update_res.status_code in (200, 201):
-                    print(f"✅ Method 2 update successful!")
+                if update_res.status_code in (200, 201):
+                    print(f"✅ Method 1 update successful!")
+                    
+                    # 验证更新
+                    print("🔍 Starting verification...")
                     verify_update(task_id, client_field_id, client_task_id)
                 else:
-                    print(f"❌ All methods failed")
+                    # 方法2: 使用字段更新端点，但尝试不同的数据格式
+                    print("🔄 Trying method 2: Using field update endpoint with simplified data format")
+                    field_update_url = f"https://api.clickup.com/api/v2/task/{task_id}/field/{client_field_id}"
+                    
+                    # 尝试最简单的格式
+                    field_update_data = {"value": [client_task_id]}
+                    
+                    print(f"   URL: {field_update_url}")
+                    print(f"   Data: {json.dumps(field_update_data)}")
+                    
+                    field_update_res = requests.post(field_update_url, headers=HEADERS, json=field_update_data)
+                    print(f"📡 Method 2 response status: {field_update_res.status_code}")
+                    print(f"📡 Method 2 response content: {field_update_res.text}")
+                    
+                    if field_update_res.status_code in (200, 201):
+                        print(f"✅ Method 2 update successful!")
+                        print("🔍 Starting verification...")
+                        verify_update(task_id, client_field_id, client_task_id)
+                    else:
+                        print(f"❌ All methods failed")
+            except Exception as e:
+                print(f"❌ Exception during update: {str(e)}")
         else:
             print(f"❌ No matching client found for: '{client_name}'")
     else:
