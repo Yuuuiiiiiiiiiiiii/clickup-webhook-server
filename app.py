@@ -1,4 +1,4 @@
-# app_fixed.py - 修复版本
+# app_fixed_relation.py - 修复关系字段格式
 from flask import Flask, request, jsonify
 import requests
 import os
@@ -120,7 +120,7 @@ def calculate_all_intervals(task_id):
         update_interval_field(task_id, "Interval 3-4", "")
 
 def handle_order_client_linking(task_id):
-    """处理Order Record的客户链接 - 修复版本"""
+    """处理Order Record的客户链接 - 修复关系字段格式"""
     print(f"🔗 Processing client linking for Order Record: {task_id}")
     
     res = requests.get(f"https://api.clickup.com/api/v2/task/{task_id}", headers=HEADERS)
@@ -140,7 +140,6 @@ def handle_order_client_linking(task_id):
         field_name = field.get("name", "")
         field_value = field.get("value")
         field_id = field.get("id")
-        print(f"   - '{field_name}': {field_value} (ID: {field_id})")
         
         # 匹配👤 Client Name字段 - 只匹配有emoji的
         if "👤 Client Name" == field_name:
@@ -186,29 +185,46 @@ def handle_order_client_linking(task_id):
         if matched_task:
             client_task_id = matched_task.get("id")
             
-            # 更新关系字段 - 添加详细的调试信息
+            # 修复：使用正确的关系字段数据格式
             update_url = f"https://api.clickup.com/api/v2/task/{task_id}/field/{client_field_id}"
-            update_data = {
-                "value": [
-                    {
-                        "id": client_task_id,
-                        "name": matched_task.get("name"),
-                    }
-                ]
-            }
+            
+            # 尝试不同的数据格式
+            # 格式1：简单ID数组（ClickUp关系字段的标准格式）
+            update_data = {"value": [client_task_id]}
             
             print(f"🔄 Updating relationship field...")
             print(f"   URL: {update_url}")
-            print(f"   Data: {json.dumps(update_data, indent=2)}")
+            print(f"   Data: {json.dumps(update_data)}")
             
             update_res = requests.post(update_url, headers=HEADERS, json=update_data)
             
             print(f"📡 Update response status: {update_res.status_code}")
             if update_res.status_code not in (200, 201):
                 print(f"❌ Update failed: {update_res.text}")
+                
+                # 如果格式1失败，尝试格式2：包含id和name的对象
+                print("🔄 Trying alternative format...")
+                update_data_alt = {
+                    "value": [
+                        {
+                            "id": client_task_id,
+                            "name": matched_task.get("name")
+                        }
+                    ]
+                }
+                print(f"   Alternative data: {json.dumps(update_data_alt)}")
+                update_res_alt = requests.post(update_url, headers=HEADERS, json=update_data_alt)
+                print(f"📡 Alternative update response: {update_res_alt.status_code}")
+                if update_res_alt.status_code not in (200, 201):
+                    print(f"❌ Alternative update also failed: {update_res_alt.text}")
+                else:
+                    print(f"✅ Alternative update successful!")
             else:
                 print(f"✅ Update successful!")
                 
+            # 等待2秒后验证更新是否成功（给API一些时间处理）
+            time.sleep(2)
+            
             # 验证更新是否成功
             verify_res = requests.get(f"https://api.clickup.com/api/v2/task/{task_id}", headers=HEADERS)
             if verify_res.status_code == 200:
@@ -219,7 +235,8 @@ def handle_order_client_linking(task_id):
                         linked_value = field.get("value")
                         print(f"🔍 Verification - 👤 Client field value: {linked_value}")
                         if linked_value and len(linked_value) > 0:
-                            print(f"🎉 SUCCESS! Client linked: {linked_value[0].get('id')}")
+                            linked_id = linked_value[0].get('id') if isinstance(linked_value[0], dict) else linked_value[0]
+                            print(f"🎉 SUCCESS! Client linked: {linked_id}")
                         else:
                             print(f"❌ Client field is still empty after update!")
                         break
@@ -227,13 +244,6 @@ def handle_order_client_linking(task_id):
         else:
             print(f"❌ No matching client found in Customer List for: '{client_name}'")
             
-            # 打印前几个客户名称用于调试
-            print("📋 Available clients in Customer List:")
-            for i, customer_task in enumerate(customer_tasks[:10]):  # 只显示前10个
-                print(f"   {i+1}. {customer_task.get('name')}")
-            if len(customer_tasks) > 10:
-                print(f"   ... and {len(customer_tasks) - 10} more")
-                
     else:
         print(f"❌ Failed to search Customer List: {search_res.status_code}")
 
