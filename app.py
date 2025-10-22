@@ -119,8 +119,44 @@ def calculate_all_intervals(task_id):
     else:
         update_interval_field(task_id, "Interval 3-4", "")
 
+def verify_update(task_id, client_field_id, expected_client_id):
+    """验证更新是否成功"""
+    print(f"🔍 Verifying update...")
+    time.sleep(2)  # 等待API处理
+    
+    verify_res = requests.get(f"https://api.clickup.com/api/v2/task/{task_id}", headers=HEADERS)
+    if verify_res.status_code == 200:
+        verify_task = verify_res.json()
+        verify_fields = verify_task.get("custom_fields", [])
+        
+        for field in verify_fields:
+            if field.get("id") == client_field_id:
+                linked_value = field.get("value")
+                print(f"   🔍 Client field current value: {linked_value}")
+                
+                if linked_value and len(linked_value) > 0:
+                    if isinstance(linked_value[0], dict):
+                        actual_id = linked_value[0].get('id')
+                    else:
+                        actual_id = linked_value[0]
+                    
+                    if actual_id == expected_client_id:
+                        print(f"   🎉 SUCCESS! Client linked: {actual_id}")
+                        return True
+                    else:
+                        print(f"   ⚠️ Client linked but with different ID: {actual_id} vs {expected_client_id}")
+                        return True
+                else:
+                    print(f"   ❌ Client field is still empty!")
+                    return False
+        print(f"   ❌ Could not find Client field for verification")
+        return False
+    else:
+        print(f"   ❌ Verification request failed: {verify_res.status_code}")
+        return False
+
 def handle_order_client_linking(task_id):
-    """处理Order Record的客户链接 - 修复版本"""
+    """处理Order Record的客户链接 - 使用批量更新方法"""
     print(f"🔗 Processing client linking for Order Record: {task_id}")
     
     res = requests.get(f"https://api.clickup.com/api/v2/task/{task_id}", headers=HEADERS)
@@ -140,14 +176,11 @@ def handle_order_client_linking(task_id):
         field_name = field.get("name", "")
         field_value = field.get("value")
         field_id = field.get("id")
-        print(f"   - '{field_name}': {field_value} (ID: {field_id})")
         
-        # 匹配👤 Client Name字段 - 只匹配有emoji的
         if "👤 Client Name" == field_name:
             client_name = field_value
             print(f"📝 Found Client Name: {client_name}")
             
-        # 匹配👤 Client关系字段 - 只匹配有emoji的
         elif "👤 Client" == field_name:
             client_field_id = field_id
             print(f"🆔 Found Client relationship field ID: {client_field_id}")
@@ -162,10 +195,9 @@ def handle_order_client_linking(task_id):
     
     print(f"🎯 Looking for client: '{client_name}' in Customer List")
     
-    # 在Customer List中查找匹配的客户（按任务名称匹配）
-    CUSTOMER_LIST_ID = "901811834458"  # 你的Customer List ID
+    # 在Customer List中查找匹配的客户
+    CUSTOMER_LIST_ID = "901811834458"
     
-    # 搜索Customer List中的所有任务
     search_url = f"https://api.clickup.com/api/v2/list/{CUSTOMER_LIST_ID}/task"
     params = {"archived": "false"}
     search_res = requests.get(search_url, headers=HEADERS, params=params)
@@ -186,54 +218,64 @@ def handle_order_client_linking(task_id):
         if matched_task:
             client_task_id = matched_task.get("id")
             
-            # 更新关系字段 - 添加详细的调试信息
-            update_url = f"https://api.clickup.com/api/v2/task/{task_id}/field/{client_field_id}"
+            # 方法1: 尝试使用任务更新端点（PUT /v2/task/{task_id}）
+            print("🔄 Trying method 1: Using task update endpoint")
+            update_url = f"https://api.clickup.com/api/v2/task/{task_id}"
+            
+            # 构建自定义字段更新数据
+            custom_fields = []
+            for field in fields:
+                if field["id"] == client_field_id:
+                    # 关系字段的特殊格式
+                    custom_fields.append({
+                        "id": client_field_id,
+                        "value": [client_task_id]  # 只包含ID的数组
+                    })
+                else:
+                    # 保持其他字段不变
+                    custom_fields.append({
+                        "id": field["id"],
+                        "value": field.get("value")
+                    })
+            
             update_data = {
-                "value": [
-                    {
-                        "id": client_task_id,
-                        "name": matched_task.get("name"),
-                    }
-                ]
+                "custom_fields": custom_fields
             }
             
-            print(f"🔄 Updating relationship field...")
             print(f"   URL: {update_url}")
             print(f"   Data: {json.dumps(update_data, indent=2)}")
             
-            update_res = requests.post(update_url, headers=HEADERS, json=update_data)
+            update_res = requests.put(update_url, headers=HEADERS, json=update_data)
+            print(f"📡 Method 1 response status: {update_res.status_code}")
+            print(f"📡 Method 1 response content: {update_res.text}")
             
-            print(f"📡 Update response status: {update_res.status_code}")
-            if update_res.status_code not in (200, 201):
-                print(f"❌ Update failed: {update_res.text}")
+            if update_res.status_code in (200, 201):
+                print(f"✅ Method 1 update successful!")
+                
+                # 验证更新
+                verify_update(task_id, client_field_id, client_task_id)
             else:
-                print(f"✅ Update successful!")
+                # 方法2: 使用字段更新端点，但尝试不同的数据格式
+                print("🔄 Trying method 2: Using field update endpoint with simplified data format")
+                field_update_url = f"https://api.clickup.com/api/v2/task/{task_id}/field/{client_field_id}"
                 
-            # 验证更新是否成功
-            verify_res = requests.get(f"https://api.clickup.com/api/v2/task/{task_id}", headers=HEADERS)
-            if verify_res.status_code == 200:
-                verify_task = verify_res.json()
-                verify_fields = verify_task.get("custom_fields", [])
-                for field in verify_fields:
-                    if field.get("id") == client_field_id:
-                        linked_value = field.get("value")
-                        print(f"🔍 Verification - 👤 Client field value: {linked_value}")
-                        if linked_value and len(linked_value) > 0:
-                            print(f"🎉 SUCCESS! Client linked: {linked_value[0].get('id')}")
-                        else:
-                            print(f"❌ Client field is still empty after update!")
-                        break
+                # 尝试最简单的格式
+                field_update_data = {"value": [client_task_id]}
                 
+                print(f"   URL: {field_update_url}")
+                print(f"   Data: {json.dumps(field_update_data)}")
+                
+                field_update_res = requests.post(field_update_url, headers=HEADERS, json=field_update_data)
+                print(f"📡 Method 2 response status: {field_update_res.status_code}")
+                print(f"📡 Method 2 response content: {field_update_res.text}")
+                
+                if field_update_res.status_code in (200, 201):
+                    print(f"✅ Method 2 update successful!")
+                    verify_update(task_id, client_field_id, client_task_id)
+                else:
+                    print(f"❌ All methods failed")
         else:
-            print(f"❌ No matching client found in Customer List for: '{client_name}'")
-            
-            # 打印前几个客户名称用于调试
-            print("📋 Available clients in Customer List:")
-            for i, customer_task in enumerate(customer_tasks[:10]):  # 只显示前10个
-                print(f"   {i+1}. {customer_task.get('name')}")
-            if len(customer_tasks) > 10:
-                print(f"   ... and {len(customer_tasks) - 10} more")
-                
+            print(f"❌ No matching client found for: '{client_name}'")
     else:
         print(f"❌ Failed to search Customer List: {search_res.status_code}")
 
