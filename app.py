@@ -16,7 +16,7 @@ HEADERS = {"Authorization": CLICKUP_TOKEN}
 
 # 请求去重缓存
 processed_tasks = {}
-PROCESS_COOLDOWN = 10  # 10秒内不重复处理同一任务
+PROCESS_COOLDOWN = 10
 
 def parse_date(timestamp):
     return datetime.fromtimestamp(int(timestamp) / 1000, tz=timezone.utc)
@@ -30,7 +30,6 @@ def format_diff(diff_seconds):
 def update_interval_field(task_id, field_name, interval_text):
     """更新Interval字段"""
     try:
-        # 获取任务详情
         res = requests.get(f"https://api.clickup.com/api/v2/task/{task_id}", headers=HEADERS)
         if res.status_code != 200:
             print(f"❌ Failed to fetch task for update: {res.status_code}")
@@ -38,7 +37,6 @@ def update_interval_field(task_id, field_name, interval_text):
             
         fields = res.json().get("custom_fields", [])
         
-        # 查找指定的Interval字段
         interval_field = None
         for field in fields:
             if field.get("name") == field_name:
@@ -71,7 +69,6 @@ def update_interval_field(task_id, field_name, interval_text):
 
 def calculate_all_intervals(task_id):
     """计算所有可能的间隔"""
-    # 获取任务详情
     res = requests.get(f"https://api.clickup.com/api/v2/task/{task_id}", headers=HEADERS)
     if res.status_code != 200:
         print(f"❌ Failed to fetch task: {res.status_code}")
@@ -80,10 +77,8 @@ def calculate_all_intervals(task_id):
     task = res.json()
     fields = task.get("custom_fields", [])
     
-    # 创建字段字典
     cf = {f["name"]: f for f in fields}
     
-    # 获取日期字段
     t1_date = cf.get("📅 T1 Date", {}).get("value")
     t2_date = cf.get("📅 T2 Date", {}).get("value") 
     t3_date = cf.get("📅 T3 Date", {}).get("value")
@@ -124,18 +119,69 @@ def calculate_all_intervals(task_id):
     else:
         update_interval_field(task_id, "Interval 3-4", "")
 
+def handle_order_client_linking(task_id):
+    """处理Order Record的客户链接"""
+    print(f"🔗 Processing client linking for Order Record: {task_id}")
+    
+    res = requests.get(f"https://api.clickup.com/api/v2/task/{task_id}", headers=HEADERS)
+    if res.status_code != 200:
+        return
+        
+    task = res.json()
+    fields = task.get("custom_fields", [])
+    
+    # 查找Client Name和Client字段
+    client_name = None
+    client_field_id = None
+    
+    for field in fields:
+        field_name = field.get("name", "")
+        if "Client Name" in field_name:
+            client_name = field.get("value")
+            print(f"📝 Found Client Name: {client_name}")
+        elif field.get("name") == "Client":
+            client_field_id = field.get("id")
+            print(f"🆔 Found Client field ID: {client_field_id}")
+    
+    if not client_name or not client_field_id:
+        print("⏭️ Missing Client Name or Client field in Order Record")
+        return
+    
+    # 在Customer List中查找匹配客户
+    CUSTOMER_LIST_ID = "901811834458"  # 你的Customer List ID
+    
+    # 搜索Customer List
+    search_url = f"https://api.clickup.com/api/v2/list/{CUSTOMER_LIST_ID}/task"
+    search_res = requests.get(search_url, headers=HEADERS)
+    
+    if search_res.status_code == 200:
+        tasks = search_res.json().get("tasks", [])
+        for customer_task in tasks:
+            if customer_task.get("name", "").strip().lower() == client_name.strip().lower():
+                client_task_id = customer_task.get("id")
+                # 更新关系字段
+                update_url = f"https://api.clickup.com/api/v2/task/{task_id}/field/{client_field_id}"
+                update_data = {"value": [{"id": client_task_id}]}
+                update_res = requests.post(update_url, headers=HEADERS, json=update_data)
+                
+                if update_res.status_code in (200, 201):
+                    print(f"✅ Successfully linked client: {client_name} -> {client_task_id}")
+                else:
+                    print(f"❌ Failed to link client: {update_res.status_code}")
+                return
+    
+    print(f"❌ No matching client found for: {client_name}")
+
 @app.route("/clickup-webhook", methods=["POST"])
 def clickup_webhook():
     data = request.json
     print("✅ Webhook received")
-
-    # 获取task_id
+    
     task_id = data.get("task_id") or (data.get("task") and data.get("task").get("id"))
     if not task_id:
-        print("❌ No task_id found")
         return jsonify({"error": "no task_id"}), 400
 
-    # 🔥 新增：请求去重检查
+    # 去重检查
     current_time = time.time()
     if task_id in processed_tasks:
         last_time = processed_tasks[task_id]
@@ -143,19 +189,30 @@ def clickup_webhook():
             print(f"⏭️ Skipping duplicate request for task {task_id}")
             return jsonify({"ignored": "duplicate"}), 200
     
-    # 标记为正在处理
     processed_tasks[task_id] = current_time
-    
-    # 清理过期缓存（避免内存泄漏）
-    expired_tasks = [tid for tid, t in processed_tasks.items() if current_time - t > PROCESS_COOLDOWN * 2]
-    for task in expired_tasks:
-        del processed_tasks[task]
 
-    print(f"🎯 Processing task: {task_id}")
+    # 获取任务详情来判断是哪个列表
+    res = requests.get(f"https://api.clickup.com/api/v2/task/{task_id}", headers=HEADERS)
+    if res.status_code != 200:
+        return jsonify({"error": "fetch failed"}), 500
+        
+    task = res.json()
+    list_id = task.get("list", {}).get("id")
     
-    # 直接计算所有间隔
-    calculate_all_intervals(task_id)
+    print(f"📋 Task from list: {list_id}")
     
+    # 根据列表ID决定处理逻辑
+    if list_id == "901811834458":  # Customer List
+        print("🔄 Processing as Customer List task (Interval calculation)")
+        calculate_all_intervals(task_id)
+        
+    elif list_id == "901812062655":  # Order Record List  
+        print("🆕 Processing as Order Record task (Client linking)")
+        handle_order_client_linking(task_id)
+        
+    else:
+        print(f"❓ Unknown list: {list_id}")
+        
     return jsonify({"success": True}), 200
 
 @app.route("/")
