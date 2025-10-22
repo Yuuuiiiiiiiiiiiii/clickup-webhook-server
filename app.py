@@ -1,4 +1,4 @@
-# app_debug_fixed.py
+# app_clean_fix.py
 from flask import Flask, request, jsonify
 import requests
 import os
@@ -14,8 +14,6 @@ app = Flask(__name__)
 CLICKUP_TOKEN = os.getenv("CLICKUP_TOKEN")
 HEADERS = {"Authorization": CLICKUP_TOKEN}
 
-print("🚀 Server starting with enhanced debugging...")
-
 # 请求去重缓存
 processed_tasks = {}
 PROCESS_COOLDOWN = 10
@@ -30,7 +28,7 @@ def format_diff(diff_seconds):
     return f"{days}d {hours}h {minutes}m"
 
 def update_interval_field(task_id, field_name, interval_text):
-    """更新Interval字段"""
+    """更新Interval字段 - 完全保持原样"""
     try:
         res = requests.get(f"https://api.clickup.com/api/v2/task/{task_id}", headers=HEADERS)
         if res.status_code != 200:
@@ -70,7 +68,7 @@ def update_interval_field(task_id, field_name, interval_text):
         return False
 
 def calculate_all_intervals(task_id):
-    """计算所有可能的间隔"""
+    """计算所有可能的间隔 - 完全保持原样"""
     res = requests.get(f"https://api.clickup.com/api/v2/task/{task_id}", headers=HEADERS)
     if res.status_code != 200:
         print(f"❌ Failed to fetch task: {res.status_code}")
@@ -122,62 +120,59 @@ def calculate_all_intervals(task_id):
         update_interval_field(task_id, "Interval 3-4", "")
 
 def handle_order_client_linking(task_id):
-    """处理Order Record的客户链接 - 详细调试版本"""
-    print(f"\n🎯 ===== 开始处理客户链接: {task_id} =====")
+    """处理Order Record的客户链接 - 修复版本"""
+    print(f"🔗 Processing client linking for Order Record: {task_id}")
     
-    # 1. 获取任务详情
-    print(f"📡 获取任务详情...")
     res = requests.get(f"https://api.clickup.com/api/v2/task/{task_id}", headers=HEADERS)
     if res.status_code != 200:
-        print(f"❌ 获取任务失败: {res.status_code}")
+        print(f"❌ Failed to fetch order task: {res.status_code}")
         return
         
     task = res.json()
     fields = task.get("custom_fields", [])
     
-    # 2. 查找关键字段
+    # 获取👤 Client Name字段值和👤 Client字段ID
     client_name = None
     client_field_id = None
     
-    print(f"🔍 分析字段...")
+    print("🔍 Searching for fields in Order Record:")
     for field in fields:
         field_name = field.get("name", "")
         field_value = field.get("value")
         field_id = field.get("id")
+        print(f"   - '{field_name}': {field_value} (ID: {field_id})")
         
-        print(f"   📋 '{field_name}': {field_value} (ID: {field_id})")
-        
-        # 匹配👤 Client Name字段
+        # 匹配👤 Client Name字段 - 只匹配有emoji的
         if "👤 Client Name" == field_name:
             client_name = field_value
-            print(f"   ✅ 找到Client Name: '{client_name}'")
+            print(f"📝 Found Client Name: {client_name}")
             
-        # 匹配👤 Client关系字段
+        # 匹配👤 Client关系字段 - 只匹配有emoji的
         elif "👤 Client" == field_name:
             client_field_id = field_id
-            print(f"   ✅ 找到Client关系字段ID: {client_field_id}")
+            print(f"🆔 Found Client relationship field ID: {client_field_id}")
     
     if not client_name:
-        print("❌ 未找到Client Name字段")
+        print("⏭️ No 👤 Client Name found in Order Record")
         return
         
     if not client_field_id:
-        print("❌ 未找到Client关系字段")
+        print("❌ 👤 Client relationship field not found in Order Record")
         return
     
-    print(f"\n🎯 搜索客户: '{client_name}'")
+    print(f"🎯 Looking for client: '{client_name}' in Customer List")
     
-    # 3. 在Customer List中搜索匹配的客户
+    # 在Customer List中查找匹配的客户（按任务名称匹配）
     CUSTOMER_LIST_ID = "901811834458"
     
-    print(f"📡 搜索Customer List中的任务...")
+    # 搜索Customer List中的所有任务
     search_url = f"https://api.clickup.com/api/v2/list/{CUSTOMER_LIST_ID}/task"
     params = {"archived": "false"}
     search_res = requests.get(search_url, headers=HEADERS, params=params)
     
     if search_res.status_code == 200:
         customer_tasks = search_res.json().get("tasks", [])
-        print(f"📊 在Customer List中找到 {len(customer_tasks)} 个任务")
+        print(f"🔍 Found {len(customer_tasks)} tasks in Customer List")
         
         # 精确匹配客户名称
         matched_task = None
@@ -185,54 +180,30 @@ def handle_order_client_linking(task_id):
             customer_name = customer_task.get("name", "").strip()
             if customer_name.lower() == client_name.strip().lower():
                 matched_task = customer_task
-                print(f"✅ 精确匹配: '{customer_name}' -> {customer_task.get('id')}")
+                print(f"✅ Exact match found: '{customer_name}' -> {customer_task.get('id')}")
                 break
         
         if matched_task:
             client_task_id = matched_task.get("id")
             
-            # 4. 更新关系字段 - 尝试不同格式
-            print(f"\n🔄 开始更新关系字段...")
-            
-            # 尝试格式1: 简单ID数组
+            # 更新关系字段 - 使用正确的格式
             update_url = f"https://api.clickup.com/api/v2/task/{task_id}/field/{client_field_id}"
-            update_data_1 = {"value": [client_task_id]}
             
-            print(f"   🔄 尝试格式1: 简单ID数组")
-            print(f"   📤 请求URL: {update_url}")
-            print(f"   📦 请求数据: {json.dumps(update_data_1)}")
+            # 关系字段的正确格式：包含任务ID的数组
+            update_data = {"value": [client_task_id]}
             
-            update_res_1 = requests.post(update_url, headers=HEADERS, json=update_data_1)
-            print(f"   📥 响应状态: {update_res_1.status_code}")
-            print(f"   📥 响应内容: {update_res_1.text}")
+            print(f"🔄 Updating relationship field...")
+            print(f"   URL: {update_url}")
+            print(f"   Data: {json.dumps(update_data)}")
             
-            if update_res_1.status_code in (200, 201):
-                print(f"   ✅ 格式1更新成功!")
+            update_res = requests.post(update_url, headers=HEADERS, json=update_data)
+            
+            print(f"📡 Update response status: {update_res.status_code}")
+            if update_res.status_code not in (200, 201):
+                print(f"❌ Update failed: {update_res.text}")
             else:
-                # 尝试格式2: 对象数组
-                print(f"   🔄 尝试格式2: 对象数组")
-                update_data_2 = {
-                    "value": [
-                        {
-                            "id": client_task_id,
-                            "name": matched_task.get("name")
-                        }
-                    ]
-                }
-                print(f"   📦 请求数据: {json.dumps(update_data_2)}")
-                update_res_2 = requests.post(update_url, headers=HEADERS, json=update_data_2)
-                print(f"   📥 响应状态: {update_res_2.status_code}")
-                print(f"   📥 响应内容: {update_res_2.text}")
+                print(f"✅ Update successful!")
                 
-                if update_res_2.status_code in (200, 201):
-                    print(f"   ✅ 格式2更新成功!")
-                else:
-                    print(f"   ❌ 两种格式都失败了")
-            
-            # 5. 验证更新结果
-            print(f"\n🔍 验证更新结果...")
-            time.sleep(2)  # 等待API处理
-            
             # 验证更新是否成功
             verify_res = requests.get(f"https://api.clickup.com/api/v2/task/{task_id}", headers=HEADERS)
             if verify_res.status_code == 200:
@@ -241,91 +212,69 @@ def handle_order_client_linking(task_id):
                 for field in verify_fields:
                     if field.get("id") == client_field_id:
                         linked_value = field.get("value")
-                        print(f"   🔍 Client字段当前值: {linked_value}")
+                        print(f"🔍 Verification - 👤 Client field value: {linked_value}")
                         if linked_value and len(linked_value) > 0:
-                            if isinstance(linked_value[0], dict):
-                                linked_id = linked_value[0].get('id')
-                            else:
-                                linked_id = linked_value[0]
-                            print(f"   🎉 成功链接客户: {linked_id}")
+                            print(f"🎉 SUCCESS! Client linked: {linked_value[0]}")
                         else:
-                            print(f"   ❌ Client字段仍然为空!")
+                            print(f"❌ Client field is still empty after update!")
                         break
-            else:
-                print(f"   ❌ 验证失败: {verify_res.status_code}")
                 
         else:
-            print(f"❌ 在Customer List中未找到匹配的客户: '{client_name}'")
-            print(f"📋 Customer List中的客户:")
-            for i, customer_task in enumerate(customer_tasks[:5]):
-                print(f"   {i+1}. {customer_task.get('name')}")
-                
+            print(f"❌ No matching client found in Customer List for: '{client_name}'")
+            
     else:
-        print(f"❌ 搜索Customer List失败: {search_res.status_code}")
-    
-    print(f"🏁 ===== 处理完成 =====\n")
+        print(f"❌ Failed to search Customer List: {search_res.status_code}")
 
 @app.route("/clickup-webhook", methods=["POST"])
 def clickup_webhook():
-    try:
-        data = request.json
-        print(f"\n✅ Webhook接收时间: {time.strftime('%Y-%m-%d %H:%M:%S')}")
-        
-        # 获取任务ID
-        task_id = data.get("task_id") or (data.get("task") and data.get("task").get("id"))
-        if not task_id:
-            print("❌ Webhook数据中没有task_id")
-            return jsonify({"error": "no task_id"}), 400
-            
-        print(f"🆔 任务ID: {task_id}")
-        print(f"📦 原始数据: {json.dumps(data, indent=2)}")
-        
-        # 去重检查
-        current_time = time.time()
-        if task_id in processed_tasks:
-            last_time = processed_tasks[task_id]
-            if current_time - last_time < PROCESS_COOLDOWN:
-                print(f"⏭️ 跳过重复请求: {task_id}")
-                return jsonify({"ignored": "duplicate"}), 200
-        
-        processed_tasks[task_id] = current_time
+    data = request.json
+    print("✅ Webhook received")
+    
+    task_id = data.get("task_id") or (data.get("task") and data.get("task").get("id"))
+    if not task_id:
+        return jsonify({"error": "no task_id"}), 400
 
-        # 获取任务详情来判断是哪个列表
-        print(f"📡 获取任务详情...")
-        res = requests.get(f"https://api.clickup.com/api/v2/task/{task_id}", headers=HEADERS)
-        if res.status_code != 200:
-            print(f"❌ 获取任务失败: {res.status_code}")
-            return jsonify({"error": "fetch failed"}), 500
-            
-        task = res.json()
-        list_id = task.get("list", {}).get("id")
-        task_name = task.get("name", "Unknown")
+    # 去重检查
+    current_time = time.time()
+    if task_id in processed_tasks:
+        last_time = processed_tasks[task_id]
+        if current_time - last_time < PROCESS_COOLDOWN:
+            print(f"⏭️ Skipping duplicate request for task {task_id}")
+            return jsonify({"ignored": "duplicate"}), 200
+    
+    processed_tasks[task_id] = current_time
+
+    # 获取任务详情来判断是哪个列表
+    res = requests.get(f"https://api.clickup.com/api/v2/task/{task_id}", headers=HEADERS)
+    if res.status_code != 200:
+        print(f"❌ Failed to fetch task: {res.status_code}")
+        return jsonify({"error": "fetch failed"}), 500
         
-        print(f"📋 任务名称: {task_name}")
-        print(f"📁 列表ID: {list_id}")
+    task = res.json()
+    list_id = task.get("list", {}).get("id")
+    
+    print(f"📋 Task from list: {list_id}")
+    
+    # 根据列表ID决定处理逻辑
+    if list_id == "901811834458":  # Customer List
+        print("🔄 Processing as Customer List task (Interval calculation)")
+        calculate_all_intervals(task_id)
         
-        # 根据列表ID决定处理逻辑
-        if list_id == "901812062655":  # Order Record List  
-            print("🆕 这是Order Record任务 - 开始客户链接")
-            handle_order_client_linking(task_id)
-        else:
-            print(f"ℹ️ 来自其他列表的任务: {list_id}")
-            
-        return jsonify({"success": True}), 200
+    elif list_id == "901812062655":  # Order Record List  
+        print("🆕 Processing as Order Record task (Client linking)")
+        handle_order_client_linking(task_id)
         
-    except Exception as e:
-        print(f"💥 未预期错误: {str(e)}")
-        import traceback
-        traceback.print_exc()
-        return jsonify({"error": str(e)}), 500
+    else:
+        print(f"❓ Unknown list: {list_id}")
+        
+    return jsonify({"success": True}), 200
 
 @app.route("/")
 def home():
-    return "ClickUp Webhook Debug Server Running", 200
+    return "ClickUp Webhook Server running", 200
 
 if __name__ == "__main__":
     from dotenv import load_dotenv
     load_dotenv()
     port = int(os.environ.get("PORT", 10000))
-    print(f"🚀 启动调试服务器，端口: {port}")
     app.run(host="0.0.0.0", port=port)
