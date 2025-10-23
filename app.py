@@ -68,6 +68,8 @@ def update_interval_field(task_id, field_name, interval_text):
 
 def calculate_all_intervals(task_id):
     """计算所有可能的间隔"""
+    print(f"🔄 Starting interval calculation for task: {task_id}")
+    
     res = requests.get(f"https://api.clickup.com/api/v2/task/{task_id}", headers=HEADERS)
     if res.status_code != 200:
         print(f"❌ Failed to fetch task: {res.status_code}")
@@ -76,47 +78,70 @@ def calculate_all_intervals(task_id):
     task = res.json()
     fields = task.get("custom_fields", [])
     
+    # 🔥 关键修复：添加字段调试信息
+    field_names = [f.get("name") for f in fields]
+    print(f"🔍 All custom fields: {field_names}")
+    
+    # 创建字段字典
     cf = {f["name"]: f for f in fields}
     
+    # 获取日期字段 - 添加详细的调试信息
     t1_date = cf.get("📅 T1 Date", {}).get("value")
     t2_date = cf.get("📅 T2 Date", {}).get("value") 
     t3_date = cf.get("📅 T3 Date", {}).get("value")
     t4_date = cf.get("📅 T4 Date", {}).get("value")
     
-    print(f"📅 Dates - T1: {t1_date}, T2: {t2_date}, T3: {t3_date}, T4: {t4_date}")
+    print(f"📅 Dates found - T1: {t1_date}, T2: {t2_date}, T3: {t3_date}, T4: {t4_date}")
     
     # 计算 Interval 1-2
     if t1_date and t2_date:
+        print("🔄 Calculating Interval 1-2")
         d1 = parse_date(t1_date)
         d2 = parse_date(t2_date)
         diff_seconds = (d2 - d1).total_seconds()
         if diff_seconds >= 0:
             interval_12 = format_diff(diff_seconds)
+            print(f"⏱️ Interval 1-2: {interval_12}")
             update_interval_field(task_id, "Interval 1-2", interval_12)
+        else:
+            print("⚠️ Negative interval 1-2, skipping")
     else:
+        print("⏭️ Missing dates for Interval 1-2, clearing field")
         update_interval_field(task_id, "Interval 1-2", "")
     
     # 计算 Interval 2-3
     if t2_date and t3_date:
+        print("🔄 Calculating Interval 2-3")
         d2 = parse_date(t2_date)
         d3 = parse_date(t3_date)
         diff_seconds = (d3 - d2).total_seconds()
         if diff_seconds >= 0:
             interval_23 = format_diff(diff_seconds)
+            print(f"⏱️ Interval 2-3: {interval_23}")
             update_interval_field(task_id, "Interval 2-3", interval_23)
+        else:
+            print("⚠️ Negative interval 2-3, skipping")
     else:
+        print("⏭️ Missing dates for Interval 2-3, clearing field")
         update_interval_field(task_id, "Interval 2-3", "")
     
     # 计算 Interval 3-4
     if t3_date and t4_date:
+        print("🔄 Calculating Interval 3-4")
         d3 = parse_date(t3_date)
         d4 = parse_date(t4_date)
         diff_seconds = (d4 - d3).total_seconds()
         if diff_seconds >= 0:
             interval_34 = format_diff(diff_seconds)
+            print(f"⏱️ Interval 3-4: {interval_34}")
             update_interval_field(task_id, "Interval 3-4", interval_34)
+        else:
+            print("⚠️ Negative interval 3-4, skipping")
     else:
+        print("⏭️ Missing dates for Interval 3-4, clearing field")
         update_interval_field(task_id, "Interval 3-4", "")
+    
+    print("✅ Interval calculation completed")
 
 def verify_relationship_update(task_id, client_field_id, expected_client_id):
     """验证关系字段更新是否成功"""
