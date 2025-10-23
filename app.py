@@ -78,14 +78,12 @@ def calculate_all_intervals(task_id):
     task = res.json()
     fields = task.get("custom_fields", [])
     
-    # 🔥 关键修复：添加字段调试信息
+    # 调试：打印所有字段名称
     field_names = [f.get("name") for f in fields]
     print(f"🔍 All custom fields: {field_names}")
     
-    # 创建字段字典
     cf = {f["name"]: f for f in fields}
     
-    # 获取日期字段 - 添加详细的调试信息
     t1_date = cf.get("📅 T1 Date", {}).get("value")
     t2_date = cf.get("📅 T2 Date", {}).get("value") 
     t3_date = cf.get("📅 T3 Date", {}).get("value")
@@ -103,8 +101,6 @@ def calculate_all_intervals(task_id):
             interval_12 = format_diff(diff_seconds)
             print(f"⏱️ Interval 1-2: {interval_12}")
             update_interval_field(task_id, "Interval 1-2", interval_12)
-        else:
-            print("⚠️ Negative interval 1-2, skipping")
     else:
         print("⏭️ Missing dates for Interval 1-2, clearing field")
         update_interval_field(task_id, "Interval 1-2", "")
@@ -119,8 +115,6 @@ def calculate_all_intervals(task_id):
             interval_23 = format_diff(diff_seconds)
             print(f"⏱️ Interval 2-3: {interval_23}")
             update_interval_field(task_id, "Interval 2-3", interval_23)
-        else:
-            print("⚠️ Negative interval 2-3, skipping")
     else:
         print("⏭️ Missing dates for Interval 2-3, clearing field")
         update_interval_field(task_id, "Interval 2-3", "")
@@ -135,8 +129,6 @@ def calculate_all_intervals(task_id):
             interval_34 = format_diff(diff_seconds)
             print(f"⏱️ Interval 3-4: {interval_34}")
             update_interval_field(task_id, "Interval 3-4", interval_34)
-        else:
-            print("⚠️ Negative interval 3-4, skipping")
     else:
         print("⏭️ Missing dates for Interval 3-4, clearing field")
         update_interval_field(task_id, "Interval 3-4", "")
@@ -180,7 +172,7 @@ def verify_relationship_update(task_id, client_field_id, expected_client_id):
         return False
 
 def handle_order_client_linking(task_id):
-    """处理Order Record的客户链接 - 使用正确的关系字段API格式"""
+    """处理Order Record的客户链接"""
     print(f"🔗 Processing client linking for Order Record: {task_id}")
     
     res = requests.get(f"https://api.clickup.com/api/v2/task/{task_id}", headers=HEADERS)
@@ -246,11 +238,10 @@ def handle_order_client_linking(task_id):
             print("🔄 Using correct Relationship Field API format")
             update_url = f"https://api.clickup.com/api/v2/task/{task_id}/field/{client_field_id}"
             
-            # 正确的payload格式：包含add和rem数组的对象
             payload = {
                 "value": {
-                    "add": [client_task_id],  # 添加客户任务ID
-                    "rem": []  # 移除的任务ID（空数组表示不移除任何）
+                    "add": [client_task_id],
+                    "rem": []
                 }
             }
             
@@ -267,8 +258,6 @@ def handle_order_client_linking(task_id):
                 
                 if update_res.status_code in (200, 201):
                     print(f"✅ Relationship field updated successfully!")
-                    
-                    # 验证更新是否成功
                     verify_relationship_update(task_id, client_field_id, client_task_id)
                 else:
                     print(f"❌ Failed to update relationship field")
@@ -289,7 +278,7 @@ def clickup_webhook():
         print("❌ No task_id found")
         return jsonify({"error": "no task_id"}), 400
 
-    # 🔥 去重检查
+    # 去重检查
     current_time = time.time()
     if task_id in processed_tasks:
         last_time = processed_tasks[task_id]
@@ -297,27 +286,21 @@ def clickup_webhook():
             print(f"⏭️ Skipping duplicate request for task {task_id}")
             return jsonify({"ignored": "duplicate"}), 200
     
-    # 标记为正在处理
     processed_tasks[task_id] = current_time
-    
-    # 清理过期缓存（避免内存泄漏）
-    expired_tasks = [tid for tid, t in processed_tasks.items() if current_time - t > PROCESS_COOLDOWN * 2]
-    for task in expired_tasks:
-        del processed_tasks[task]
 
     print(f"🎯 Processing task: {task_id}")
     
-    # 🔥 关键修复：先尝试获取列表信息，如果失败则直接计算Interval
     try:
         # 获取任务详情来判断是哪个列表
         res = requests.get(f"https://api.clickup.com/api/v2/task/{task_id}", headers=HEADERS)
         if res.status_code == 200:
             task = res.json()
             list_id = task.get("list", {}).get("id")
+            task_name = task.get("name", "Unknown")
             
-            print(f"📋 Task from list: {list_id}")
+            print(f"📋 Task '{task_name}' from list: {list_id}")
             
-            # 根据列表ID决定处理逻辑
+            # 🔥 关键修改：同时处理两个列表
             if list_id == "901811834458":  # Customer List
                 print("🔄 Processing as Customer List task (Interval calculation)")
                 calculate_all_intervals(task_id)
@@ -327,15 +310,12 @@ def clickup_webhook():
                 handle_order_client_linking(task_id)
                 
             else:
-                print(f"❓ Unknown list: {list_id}, calculating intervals anyway")
-                calculate_all_intervals(task_id)
+                print(f"❓ Unknown list: {list_id}, skipping")
         else:
-            print(f"⚠️ Failed to fetch task details, calculating intervals anyway: {res.status_code}")
-            calculate_all_intervals(task_id)
+            print(f"⚠️ Failed to fetch task details: {res.status_code}")
             
     except Exception as e:
-        print(f"⚠️ Exception while processing task, calculating intervals anyway: {str(e)}")
-        calculate_all_intervals(task_id)
+        print(f"⚠️ Exception while processing task: {str(e)}")
     
     return jsonify({"success": True}), 200
 
@@ -348,4 +328,3 @@ if __name__ == "__main__":
     load_dotenv()
     port = int(os.environ.get("PORT", 10000))
     app.run(host="0.0.0.0", port=port)
-
