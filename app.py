@@ -261,9 +261,10 @@ def clickup_webhook():
     
     task_id = data.get("task_id") or (data.get("task") and data.get("task").get("id"))
     if not task_id:
+        print("❌ No task_id found")
         return jsonify({"error": "no task_id"}), 400
 
-    # 去重检查
+    # 🔥 去重检查
     current_time = time.time()
     if task_id in processed_tasks:
         last_time = processed_tasks[task_id]
@@ -271,31 +272,46 @@ def clickup_webhook():
             print(f"⏭️ Skipping duplicate request for task {task_id}")
             return jsonify({"ignored": "duplicate"}), 200
     
+    # 标记为正在处理
     processed_tasks[task_id] = current_time
+    
+    # 清理过期缓存（避免内存泄漏）
+    expired_tasks = [tid for tid, t in processed_tasks.items() if current_time - t > PROCESS_COOLDOWN * 2]
+    for task in expired_tasks:
+        del processed_tasks[task]
 
-    # 获取任务详情来判断是哪个列表
-    res = requests.get(f"https://api.clickup.com/api/v2/task/{task_id}", headers=HEADERS)
-    if res.status_code != 200:
-        print(f"❌ Failed to fetch task: {res.status_code}")
-        return jsonify({"error": "fetch failed"}), 500
-        
-    task = res.json()
-    list_id = task.get("list", {}).get("id")
+    print(f"🎯 Processing task: {task_id}")
     
-    print(f"📋 Task from list: {list_id}")
-    
-    # 根据列表ID决定处理逻辑
-    if list_id == "901811834458":  # Customer List
-        print("🔄 Processing as Customer List task (Interval calculation)")
+    # 🔥 关键修复：先尝试获取列表信息，如果失败则直接计算Interval
+    try:
+        # 获取任务详情来判断是哪个列表
+        res = requests.get(f"https://api.clickup.com/api/v2/task/{task_id}", headers=HEADERS)
+        if res.status_code == 200:
+            task = res.json()
+            list_id = task.get("list", {}).get("id")
+            
+            print(f"📋 Task from list: {list_id}")
+            
+            # 根据列表ID决定处理逻辑
+            if list_id == "901811834458":  # Customer List
+                print("🔄 Processing as Customer List task (Interval calculation)")
+                calculate_all_intervals(task_id)
+                
+            elif list_id == "901812062655":  # Order Record List  
+                print("🆕 Processing as Order Record task (Client linking)")
+                handle_order_client_linking(task_id)
+                
+            else:
+                print(f"❓ Unknown list: {list_id}, calculating intervals anyway")
+                calculate_all_intervals(task_id)
+        else:
+            print(f"⚠️ Failed to fetch task details, calculating intervals anyway: {res.status_code}")
+            calculate_all_intervals(task_id)
+            
+    except Exception as e:
+        print(f"⚠️ Exception while processing task, calculating intervals anyway: {str(e)}")
         calculate_all_intervals(task_id)
-        
-    elif list_id == "901812062655":  # Order Record List  
-        print("🆕 Processing as Order Record task (Client linking)")
-        handle_order_client_linking(task_id)
-        
-    else:
-        print(f"❓ Unknown list: {list_id}")
-        
+    
     return jsonify({"success": True}), 200
 
 @app.route("/")
@@ -307,4 +323,3 @@ if __name__ == "__main__":
     load_dotenv()
     port = int(os.environ.get("PORT", 10000))
     app.run(host="0.0.0.0", port=port)
-    
