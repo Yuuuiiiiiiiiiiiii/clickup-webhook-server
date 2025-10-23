@@ -35,7 +35,13 @@ def update_interval_field(task_id, field_name, interval_text):
             return False
             
         fields = res.json().get("custom_fields", [])
-        interval_field = next((f for f in fields if f.get("name") == field_name), None)
+        
+        interval_field = None
+        for field in fields:
+            if field.get("name") == field_name:
+                interval_field = field
+                break
+                
         if not interval_field:
             print(f"❌ {field_name} field not found.")
             return False
@@ -43,6 +49,7 @@ def update_interval_field(task_id, field_name, interval_text):
         field_id = interval_field["id"]
         url = f"https://api.clickup.com/api/v2/task/{task_id}/field/{field_id}"
         data = {"value": interval_text}
+        
         r = requests.post(url, headers=HEADERS, json=data)
         
         if r.status_code == 429:
@@ -68,6 +75,7 @@ def calculate_all_intervals(task_id):
     
     task = res.json()
     fields = task.get("custom_fields", [])
+    
     cf = {f["name"]: f for f in fields}
     
     t1_date = cf.get("📅 T1 Date", {}).get("value")
@@ -77,58 +85,69 @@ def calculate_all_intervals(task_id):
     
     print(f"📅 Dates - T1: {t1_date}, T2: {t2_date}, T3: {t3_date}, T4: {t4_date}")
     
-    # Interval 1-2
+    # 计算 Interval 1-2
     if t1_date and t2_date:
-        d1, d2 = parse_date(t1_date), parse_date(t2_date)
+        d1 = parse_date(t1_date)
+        d2 = parse_date(t2_date)
         diff_seconds = (d2 - d1).total_seconds()
-        interval_12 = format_diff(diff_seconds)
-        update_interval_field(task_id, "Interval 1-2", interval_12)
+        if diff_seconds >= 0:
+            interval_12 = format_diff(diff_seconds)
+            update_interval_field(task_id, "Interval 1-2", interval_12)
     else:
         update_interval_field(task_id, "Interval 1-2", "")
     
-    # Interval 2-3
+    # 计算 Interval 2-3
     if t2_date and t3_date:
-        d2, d3 = parse_date(t2_date), parse_date(t3_date)
+        d2 = parse_date(t2_date)
+        d3 = parse_date(t3_date)
         diff_seconds = (d3 - d2).total_seconds()
-        interval_23 = format_diff(diff_seconds)
-        update_interval_field(task_id, "Interval 2-3", interval_23)
+        if diff_seconds >= 0:
+            interval_23 = format_diff(diff_seconds)
+            update_interval_field(task_id, "Interval 2-3", interval_23)
     else:
         update_interval_field(task_id, "Interval 2-3", "")
     
-    # Interval 3-4
+    # 计算 Interval 3-4
     if t3_date and t4_date:
-        d3, d4 = parse_date(t3_date), parse_date(t4_date)
+        d3 = parse_date(t3_date)
+        d4 = parse_date(t4_date)
         diff_seconds = (d4 - d3).total_seconds()
-        interval_34 = format_diff(diff_seconds)
-        update_interval_field(task_id, "Interval 3-4", interval_34)
+        if diff_seconds >= 0:
+            interval_34 = format_diff(diff_seconds)
+            update_interval_field(task_id, "Interval 3-4", interval_34)
     else:
         update_interval_field(task_id, "Interval 3-4", "")
 
-def verify_update(task_id, client_field_id, expected_client_id):
-    """验证更新是否成功"""
-    print(f"🔍 Verifying update...")
-    time.sleep(3)  # 等待ClickUp更新
+def verify_relationship_update(task_id, client_field_id, expected_client_id):
+    """验证关系字段更新是否成功"""
+    print(f"🔍 Verifying relationship field update...")
+    time.sleep(2)
     
     verify_res = requests.get(f"https://api.clickup.com/api/v2/task/{task_id}", headers=HEADERS)
     if verify_res.status_code == 200:
-        verify_fields = verify_res.json().get("custom_fields", [])
+        verify_task = verify_res.json()
+        verify_fields = verify_task.get("custom_fields", [])
+        
         for field in verify_fields:
             if field.get("id") == client_field_id:
                 linked_value = field.get("value")
                 print(f"   🔍 Client field current value: {linked_value}")
-                if linked_value:
+                
+                if linked_value and len(linked_value) > 0:
                     if isinstance(linked_value[0], dict):
                         actual_id = linked_value[0].get('id')
                     else:
                         actual_id = linked_value[0]
+                    
                     if actual_id == expected_client_id:
-                        print(f"   🎉 SUCCESS! Client linked: {actual_id}")
+                        print(f"   🎉 SUCCESS! Client relationship established: {actual_id}")
                         return True
                     else:
-                        print(f"   ⚠️ Linked but ID mismatch: {actual_id} vs {expected_client_id}")
+                        print(f"   ⚠️ Client linked but with different ID: {actual_id} vs {expected_client_id}")
                         return True
-                print(f"   ❌ Client field is still empty!")
-                return False
+                else:
+                    print(f"   ❌ Client field is still empty!")
+                    return False
         print(f"   ❌ Could not find Client field for verification")
         return False
     else:
@@ -136,7 +155,7 @@ def verify_update(task_id, client_field_id, expected_client_id):
         return False
 
 def handle_order_client_linking(task_id):
-    """处理 Order Record 的客户链接（修正版）"""
+    """处理Order Record的客户链接 - 使用正确的关系字段API格式"""
     print(f"🔗 Processing client linking for Order Record: {task_id}")
     
     res = requests.get(f"https://api.clickup.com/api/v2/task/{task_id}", headers=HEADERS)
@@ -147,61 +166,93 @@ def handle_order_client_linking(task_id):
     task = res.json()
     fields = task.get("custom_fields", [])
     
+    # 获取👤 Client Name字段值和👤 Client字段ID
     client_name = None
     client_field_id = None
     
     print("🔍 Searching for fields in Order Record:")
     for field in fields:
-        if field.get("name") == "👤 Client Name":
-            client_name = field.get("value")
+        field_name = field.get("name", "")
+        field_value = field.get("value")
+        field_id = field.get("id")
+        
+        if "👤 Client Name" == field_name:
+            client_name = field_value
             print(f"📝 Found Client Name: {client_name}")
-        elif field.get("name") == "👤 Client":
-            client_field_id = field.get("id")
+            
+        elif "👤 Client" == field_name:
+            client_field_id = field_id
             print(f"🆔 Found Client relationship field ID: {client_field_id}")
     
     if not client_name:
         print("⏭️ No 👤 Client Name found in Order Record")
         return
+        
     if not client_field_id:
         print("❌ 👤 Client relationship field not found in Order Record")
         return
     
+    print(f"🎯 Looking for client: '{client_name}' in Customer List")
+    
+    # 在Customer List中查找匹配的客户
     CUSTOMER_LIST_ID = "901811834458"
-    print(f"🎯 Looking for client '{client_name}' in Customer List ({CUSTOMER_LIST_ID})...")
     
     search_url = f"https://api.clickup.com/api/v2/list/{CUSTOMER_LIST_ID}/task"
-    res = requests.get(search_url, headers=HEADERS, params={"archived": "false"})
-    if res.status_code != 200:
-        print(f"❌ Failed to search Customer List: {res.status_code}")
-        return
+    params = {"archived": "false"}
+    search_res = requests.get(search_url, headers=HEADERS, params=params)
     
-    customer_tasks = res.json().get("tasks", [])
-    matched_task = next((t for t in customer_tasks if t.get("name", "").strip().lower() == client_name.strip().lower()), None)
-    
-    if not matched_task:
-        print(f"❌ No matching client found for '{client_name}'")
-        return
-    
-    client_task_id = matched_task.get("id")
-    print(f"✅ Exact match found: '{client_name}' -> {client_task_id}")
-    
-    # 正确的 Relationship 更新方式
-    field_update_url = f"https://api.clickup.com/api/v2/task/{task_id}/field/{client_field_id}"
-    field_update_data = {"value": [client_task_id]}
-    
-    print(f"🔄 Linking via Relationship API...")
-    print(f"   URL: {field_update_url}")
-    print(f"   Data: {json.dumps(field_update_data)}")
-    
-    field_update_res = requests.post(field_update_url, headers=HEADERS, json=field_update_data)
-    print(f"📡 Response: {field_update_res.status_code}")
-    print(f"📡 Content: {field_update_res.text}")
-    
-    if field_update_res.status_code in (200, 201):
-        print("✅ Relationship link request successful!")
-        verify_update(task_id, client_field_id, client_task_id)
+    if search_res.status_code == 200:
+        customer_tasks = search_res.json().get("tasks", [])
+        print(f"🔍 Found {len(customer_tasks)} tasks in Customer List")
+        
+        # 精确匹配客户名称
+        matched_task = None
+        for customer_task in customer_tasks:
+            customer_name = customer_task.get("name", "").strip()
+            if customer_name.lower() == client_name.strip().lower():
+                matched_task = customer_task
+                print(f"✅ Exact match found: '{customer_name}' -> {customer_task.get('id')}")
+                break
+        
+        if matched_task:
+            client_task_id = matched_task.get("id")
+            
+            # 使用正确的关系字段API格式
+            print("🔄 Using correct Relationship Field API format")
+            update_url = f"https://api.clickup.com/api/v2/task/{task_id}/field/{client_field_id}"
+            
+            # 正确的payload格式：包含add和rem数组的对象
+            payload = {
+                "value": {
+                    "add": [client_task_id],  # 添加客户任务ID
+                    "rem": []  # 移除的任务ID（空数组表示不移除任何）
+                }
+            }
+            
+            headers_with_content = HEADERS.copy()
+            headers_with_content["Content-Type"] = "application/json"
+            
+            print(f"   URL: {update_url}")
+            print(f"   Payload: {json.dumps(payload, indent=2)}")
+            
+            try:
+                update_res = requests.post(update_url, headers=headers_with_content, json=payload)
+                print(f"📡 API response status: {update_res.status_code}")
+                print(f"📡 API response content: {update_res.text}")
+                
+                if update_res.status_code in (200, 201):
+                    print(f"✅ Relationship field updated successfully!")
+                    
+                    # 验证更新是否成功
+                    verify_relationship_update(task_id, client_field_id, client_task_id)
+                else:
+                    print(f"❌ Failed to update relationship field")
+            except Exception as e:
+                print(f"❌ Exception during update: {str(e)}")
+        else:
+            print(f"❌ No matching client found for: '{client_name}'")
     else:
-        print(f"❌ Relationship link failed: {field_update_res.status_code}")
+        print(f"❌ Failed to search Customer List: {search_res.status_code}")
 
 @app.route("/clickup-webhook", methods=["POST"])
 def clickup_webhook():
@@ -212,13 +263,17 @@ def clickup_webhook():
     if not task_id:
         return jsonify({"error": "no task_id"}), 400
 
+    # 去重检查
     current_time = time.time()
     if task_id in processed_tasks:
-        if current_time - processed_tasks[task_id] < PROCESS_COOLDOWN:
+        last_time = processed_tasks[task_id]
+        if current_time - last_time < PROCESS_COOLDOWN:
             print(f"⏭️ Skipping duplicate request for task {task_id}")
             return jsonify({"ignored": "duplicate"}), 200
+    
     processed_tasks[task_id] = current_time
 
+    # 获取任务详情来判断是哪个列表
     res = requests.get(f"https://api.clickup.com/api/v2/task/{task_id}", headers=HEADERS)
     if res.status_code != 200:
         print(f"❌ Failed to fetch task: {res.status_code}")
@@ -226,14 +281,18 @@ def clickup_webhook():
         
     task = res.json()
     list_id = task.get("list", {}).get("id")
+    
     print(f"📋 Task from list: {list_id}")
     
+    # 根据列表ID决定处理逻辑
     if list_id == "901811834458":  # Customer List
         print("🔄 Processing as Customer List task (Interval calculation)")
         calculate_all_intervals(task_id)
-    elif list_id == "901812062655":  # Order Record
+        
+    elif list_id == "901812062655":  # Order Record List  
         print("🆕 Processing as Order Record task (Client linking)")
         handle_order_client_linking(task_id)
+        
     else:
         print(f"❓ Unknown list: {list_id}")
         
@@ -244,5 +303,8 @@ def home():
     return "ClickUp Webhook Server running", 200
 
 if __name__ == "__main__":
+    from dotenv import load_dotenv
+    load_dotenv()
     port = int(os.environ.get("PORT", 10000))
     app.run(host="0.0.0.0", port=port)
+    
