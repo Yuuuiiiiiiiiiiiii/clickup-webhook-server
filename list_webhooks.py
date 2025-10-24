@@ -11,7 +11,7 @@ url = f"https://api.clickup.com/api/v2/team/{TEAM_ID}/webhook"
 headers = {
     "Authorization": CLICKUP_TOKEN
 }
-
+ 
 res = requests.get(url, headers=headers)
 webhooks = res.json().get("webhooks", [])
 
