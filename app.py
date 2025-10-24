@@ -27,40 +27,50 @@ def format_diff(diff_seconds):
     return f"{days}d {hours}h {minutes}m"
 
 def update_interval_field(task_id, field_name, interval_text):
-    """更新Interval字段"""
-    try:
-        res = requests.get(f"https://api.clickup.com/api/v2/task/{task_id}", headers=HEADERS)
-        if res.status_code != 200:
-            return False
-            
-        fields = res.json().get("custom_fields", [])
-        
-        interval_field = None
-        for field in fields:
-            if field.get("name") == field_name:
-                interval_field = field
-                break
+    """更新Interval字段 - 带重试机制"""
+    max_retries = 2
+    retry_delay = 0.5  # 秒
+    
+    for attempt in range(max_retries):
+        try:
+            # 第一次立即执行，后续重试加延迟
+            if attempt > 0:
+                time.sleep(retry_delay)
                 
-        if not interval_field:
-            return False
+            res = requests.get(f"https://api.clickup.com/api/v2/task/{task_id}", headers=HEADERS)
+            if res.status_code != 200:
+                continue
+                
+            fields = res.json().get("custom_fields", [])
+            
+            interval_field = None
+            for field in fields:
+                if field.get("name") == field_name:
+                    interval_field = field
+                    break
+                    
+            if not interval_field:
+                continue
 
-        field_id = interval_field["id"]
-        url = f"https://api.clickup.com/api/v2/task/{task_id}/field/{field_id}"
-        data = {"value": interval_text}
-        
-        r = requests.post(url, headers=HEADERS, json=data)
-        
-        if r.status_code in (200, 201):
-            return True
-        else:
-            return False
-        
-    except Exception:
-        return False
+            field_id = interval_field["id"]
+            url = f"https://api.clickup.com/api/v2/task/{task_id}/field/{field_id}"
+            data = {"value": interval_text}
+            
+            r = requests.post(url, headers=HEADERS, json=data)
+            
+            if r.status_code in (200, 201):
+                # 成功更新后，再轻微延迟确保前端同步
+                time.sleep(0.3)
+                return True
+                
+        except Exception:
+            continue
+            
+    return False
 
 def calculate_all_intervals(task_id):
     """只计算日期间隔，不依赖其他字段"""
-    # 添加延迟，确保日期值已保存
+    # 确保日期值已保存
     time.sleep(1)
     
     res = requests.get(f"https://api.clickup.com/api/v2/task/{task_id}", headers=HEADERS)
@@ -93,6 +103,9 @@ def calculate_all_intervals(task_id):
         elif "T4 Date" in name:
             t4_date = value
     
+    # 计算并更新所有Interval字段
+    intervals_updated = 0
+    
     # 计算 Interval 1-2
     if t1_date and t2_date:
         d1 = parse_date(t1_date)
@@ -100,9 +113,11 @@ def calculate_all_intervals(task_id):
         diff_seconds = (d2 - d1).total_seconds()
         if diff_seconds >= 0:
             interval_12 = format_diff(diff_seconds)
-            update_interval_field(task_id, "Interval 1-2", interval_12)
+            if update_interval_field(task_id, "Interval 1-2", interval_12):
+                intervals_updated += 1
     else:
-        update_interval_field(task_id, "Interval 1-2", "")
+        if update_interval_field(task_id, "Interval 1-2", ""):
+            intervals_updated += 1
     
     # 计算 Interval 2-3
     if t2_date and t3_date:
@@ -111,9 +126,11 @@ def calculate_all_intervals(task_id):
         diff_seconds = (d3 - d2).total_seconds()
         if diff_seconds >= 0:
             interval_23 = format_diff(diff_seconds)
-            update_interval_field(task_id, "Interval 2-3", interval_23)
+            if update_interval_field(task_id, "Interval 2-3", interval_23):
+                intervals_updated += 1
     else:
-        update_interval_field(task_id, "Interval 2-3", "")
+        if update_interval_field(task_id, "Interval 2-3", ""):
+            intervals_updated += 1
     
     # 计算 Interval 3-4
     if t3_date and t4_date:
@@ -122,9 +139,20 @@ def calculate_all_intervals(task_id):
         diff_seconds = (d4 - d3).total_seconds()
         if diff_seconds >= 0:
             interval_34 = format_diff(diff_seconds)
-            update_interval_field(task_id, "Interval 3-4", interval_34)
+            if update_interval_field(task_id, "Interval 3-4", interval_34):
+                intervals_updated += 1
     else:
-        update_interval_field(task_id, "Interval 3-4", "")
+        if update_interval_field(task_id, "Interval 3-4", ""):
+            intervals_updated += 1
+    
+    print(f"✅ Interval calculation completed - {intervals_updated} fields updated")
+    
+    # 最终触发刷新
+    time.sleep(0.3)
+    try:
+        requests.get(f"https://api.clickup.com/api/v2/task/{task_id}", headers=HEADERS)
+    except:
+        pass
 
 def verify_relationship_update(task_id, client_field_id, expected_client_id):
     """验证关系字段更新是否成功"""
