@@ -28,6 +28,7 @@ def format_diff(diff_seconds):
 
 def update_interval_field(task_id, field_name, interval_text):
     """更新Interval字段"""
+    print(f"🔄 Updating {field_name} to: {interval_text}")
     try:
         res = requests.get(f"https://api.clickup.com/api/v2/task/{task_id}", headers=HEADERS)
         if res.status_code != 200:
@@ -50,16 +51,14 @@ def update_interval_field(task_id, field_name, interval_text):
         url = f"https://api.clickup.com/api/v2/task/{task_id}/field/{field_id}"
         data = {"value": interval_text}
         
+        print(f"📡 Sending update to: {url}")
         r = requests.post(url, headers=HEADERS, json=data)
         
-        if r.status_code == 429:
-            print(f"🚫 Rate limit hit while updating {field_name}")
-            return False
-        elif r.status_code in (200, 201):
-            print(f"✅ Updated {field_name}: {interval_text}")
+        if r.status_code in (200, 201):
+            print(f"✅ Successfully updated {field_name}")
             return True
         else:
-            print(f"❌ Failed to update {field_name}: {r.status_code}")
+            print(f"❌ Failed to update {field_name}: {r.status_code} - {r.text}")
             return False
         
     except Exception as e:
@@ -67,7 +66,7 @@ def update_interval_field(task_id, field_name, interval_text):
         return False
 
 def calculate_all_intervals(task_id):
-    """计算所有可能的间隔"""
+    """只计算日期间隔，不依赖其他字段"""
     print(f"🔄 Starting interval calculation for task: {task_id}")
     
     res = requests.get(f"https://api.clickup.com/api/v2/task/{task_id}", headers=HEADERS)
@@ -82,14 +81,32 @@ def calculate_all_intervals(task_id):
     field_names = [f.get("name") for f in fields]
     print(f"🔍 All custom fields: {field_names}")
     
-    cf = {f["name"]: f for f in fields}
+    # 只搜索日期字段
+    date_fields = {}
+    for field in fields:
+        name = field.get("name", "")
+        if "📅 T1 Date" in name or "📅 T2 Date" in name or "📅 T3 Date" in name or "📅 T4 Date" in name:
+            date_fields[name] = field.get("value")
     
-    t1_date = cf.get("📅 T1 Date", {}).get("value")
-    t2_date = cf.get("📅 T2 Date", {}).get("value") 
-    t3_date = cf.get("📅 T3 Date", {}).get("value")
-    t4_date = cf.get("📅 T4 Date", {}).get("value")
+    print(f"📅 Found date fields: {date_fields}")
     
-    print(f"📅 Dates found - T1: {t1_date}, T2: {t2_date}, T3: {t3_date}, T4: {t4_date}")
+    # 提取日期值
+    t1_date = None
+    t2_date = None  
+    t3_date = None
+    t4_date = None
+    
+    for name, value in date_fields.items():
+        if "T1 Date" in name:
+            t1_date = value
+        elif "T2 Date" in name:
+            t2_date = value
+        elif "T3 Date" in name:
+            t3_date = value
+        elif "T4 Date" in name:
+            t4_date = value
+    
+    print(f"📅 Extracted dates - T1: {t1_date}, T2: {t2_date}, T3: {t3_date}, T4: {t4_date}")
     
     # 计算 Interval 1-2
     if t1_date and t2_date:
@@ -101,8 +118,10 @@ def calculate_all_intervals(task_id):
             interval_12 = format_diff(diff_seconds)
             print(f"⏱️ Interval 1-2: {interval_12}")
             update_interval_field(task_id, "Interval 1-2", interval_12)
+        else:
+            print("⚠️ Negative interval for 1-2")
     else:
-        print("⏭️ Missing dates for Interval 1-2, clearing field")
+        print("⏭️ Missing dates for Interval 1-2")
         update_interval_field(task_id, "Interval 1-2", "")
     
     # 计算 Interval 2-3
@@ -115,8 +134,10 @@ def calculate_all_intervals(task_id):
             interval_23 = format_diff(diff_seconds)
             print(f"⏱️ Interval 2-3: {interval_23}")
             update_interval_field(task_id, "Interval 2-3", interval_23)
+        else:
+            print("⚠️ Negative interval for 2-3")
     else:
-        print("⏭️ Missing dates for Interval 2-3, clearing field")
+        print("⏭️ Missing dates for Interval 2-3")
         update_interval_field(task_id, "Interval 2-3", "")
     
     # 计算 Interval 3-4
@@ -129,12 +150,15 @@ def calculate_all_intervals(task_id):
             interval_34 = format_diff(diff_seconds)
             print(f"⏱️ Interval 3-4: {interval_34}")
             update_interval_field(task_id, "Interval 3-4", interval_34)
+        else:
+            print("⚠️ Negative interval for 3-4")
     else:
-        print("⏭️ Missing dates for Interval 3-4, clearing field")
+        print("⏭️ Missing dates for Interval 3-4")
         update_interval_field(task_id, "Interval 3-4", "")
     
     print("✅ Interval calculation completed")
 
+# Order Record 部分保持不变
 def verify_relationship_update(task_id, client_field_id, expected_client_id):
     """验证关系字段更新是否成功"""
     print(f"🔍 Verifying relationship field update...")
@@ -270,13 +294,30 @@ def handle_order_client_linking(task_id):
 
 @app.route("/clickup-webhook", methods=["POST"])
 def clickup_webhook():
-    data = request.json
-    print("✅ Webhook received")
+    print("🎯 WEBHOOK TRIGGERED - Starting processing")
+    
+    # 打印原始请求信息
+    print(f"📦 Request method: {request.method}")
+    print(f"📦 Content-Type: {request.headers.get('Content-Type')}")
+    
+    try:
+        data = request.json
+        if data:
+            print(f"📦 Webhook data received")
+            print(f"📦 Task ID: {data.get('task_id')}")
+        else:
+            raw_data = request.get_data()
+            print(f"📦 Raw data (not JSON): {raw_data}")
+    except Exception as e:
+        print(f"❌ Error parsing request data: {str(e)}")
+        return jsonify({"error": "invalid_json"}), 400
     
     task_id = data.get("task_id") or (data.get("task") and data.get("task").get("id"))
     if not task_id:
         print("❌ No task_id found")
         return jsonify({"error": "no task_id"}), 400
+
+    print(f"🆔 Task ID from webhook: {task_id}")
 
     # 去重检查
     current_time = time.time()
@@ -292,15 +333,19 @@ def clickup_webhook():
     
     try:
         # 获取任务详情来判断是哪个列表
+        print("📡 Fetching task details from ClickUp API...")
         res = requests.get(f"https://api.clickup.com/api/v2/task/{task_id}", headers=HEADERS)
+        print(f"📡 API Response status: {res.status_code}")
+        
         if res.status_code == 200:
             task = res.json()
             list_id = task.get("list", {}).get("id")
             task_name = task.get("name", "Unknown")
             
-            print(f"📋 Task '{task_name}' from list: {list_id}")
+            print(f"📋 Task: {task_name}")
+            print(f"📁 List ID: {list_id}")
             
-            # 🔥 关键修改：同时处理两个列表
+            # 根据列表ID决定处理逻辑
             if list_id == "901811834458":  # Customer List
                 print("🔄 Processing as Customer List task (Interval calculation)")
                 calculate_all_intervals(task_id)
@@ -313,10 +358,14 @@ def clickup_webhook():
                 print(f"❓ Unknown list: {list_id}, skipping")
         else:
             print(f"⚠️ Failed to fetch task details: {res.status_code}")
+            print(f"⚠️ Response text: {res.text}")
             
     except Exception as e:
-        print(f"⚠️ Exception while processing task: {str(e)}")
+        print(f"💥 Exception during processing: {str(e)}")
+        import traceback
+        traceback.print_exc()
     
+    print("🏁 Webhook processing completed")
     return jsonify({"success": True}), 200
 
 @app.route("/")
