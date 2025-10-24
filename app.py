@@ -60,6 +60,9 @@ def update_interval_field(task_id, field_name, interval_text):
 
 def calculate_all_intervals(task_id):
     """只计算日期间隔，不依赖其他字段"""
+    # 添加延迟，确保日期值已保存
+    time.sleep(1)
+    
     res = requests.get(f"https://api.clickup.com/api/v2/task/{task_id}", headers=HEADERS)
     if res.status_code != 200:
         return
