@@ -28,7 +28,7 @@ if response.status_code == 200:
 # 创建新的Order Record Webhook，监听创建和更新事件
 order_webhook = {
     "endpoint": "https://clickup-webhook-server-xa5x.onrender.com/clickup-webhook",
-    "events": ["taskCreated", "taskUpdated"],  # 添加taskCreated事件
+    "events": ["taskCreated"],  # 添加taskCreated事件
     "list_id": "901812062655"  # Order Record List ID
 }
 
