@@ -185,58 +185,144 @@ def calculate_all_intervals(task_id):
     except Exception as e:
         print(f"❌ 计算间隔异常: {str(e)}")
 
-def handle_order_client_linking(task_id):
-    """处理客户链接 - 安全版本"""
-    try:
-        print(f"🔗 Processing client linking for Order Record: {task_id}")
+def verify_relationship_update(task_id, client_field_id, expected_client_id):
+    """验证关系字段更新是否成功"""
+    print(f"🔍 Verifying relationship field update...")
+    time.sleep(2)
+    
+    verify_res = safe_api_call(f"https://api.clickup.com/api/v2/task/{task_id}")
+    if verify_res.status_code == 200:
+        verify_task = verify_res.json()
+        verify_fields = verify_task.get("custom_fields", [])
         
-        res = safe_api_call(f"https://api.clickup.com/api/v2/task/{task_id}")
-        if res.status_code != 200:
-            print(f"❌ 获取订单任务失败: {res.status_code}")
-            return
-            
-        task = res.json()
-        fields = task.get("custom_fields", [])
-        
-        client_name = None
-        client_field_id = None
-        
-        for field in fields:
-            if field.get("name") == "👤 Client Name":
-                client_name = field.get("value")
-            elif field.get("name") == "👤 Client":
-                client_field_id = field.get("id")
-        
-        if not client_name or not client_field_id:
-            print("⏭️ 缺少客户信息")
-            return
-        
-        print(f"🎯 Looking for client: '{client_name}'")
-        
-        # 搜索客户
-        CUSTOMER_LIST_ID = "901811834458"
-        search_url = f"https://api.clickup.com/api/v2/list/{CUSTOMER_LIST_ID}/task"
-        search_res = safe_api_call(search_url, params={"archived": "false"})
-        
-        if search_res.status_code == 200:
-            for customer_task in search_res.json().get("tasks", []):
-                if customer_task.get("name", "").strip().lower() == client_name.strip().lower():
-                    client_task_id = customer_task.get("id")
-                    
-                    update_url = f"https://api.clickup.com/api/v2/task/{task_id}/field/{client_field_id}"
-                    payload = {"value": {"add": [client_task_id], "rem": []}}
-                    
-                    update_res = safe_api_call(update_url, method='POST', json_data=payload)
-                    if update_res.status_code in (200, 201):
-                        print(f"✅ 客户链接成功!")
+        for field in verify_fields:
+            if field.get("id") == client_field_id:
+                linked_value = field.get("value")
+                print(f"   🔍 Client field current value: {linked_value}")
+                
+                if linked_value and len(linked_value) > 0:
+                    if isinstance(linked_value[0], dict):
+                        actual_id = linked_value[0].get('id')
                     else:
-                        print(f"❌ 客户链接失败: {update_res.status_code}")
-                    break
-        else:
-            print(f"❌ 搜索客户失败: {search_res.status_code}")
+                        actual_id = linked_value[0]
+                    
+                    if actual_id == expected_client_id:
+                        print(f"   🎉 SUCCESS! Client relationship established: {actual_id}")
+                        return True
+                    else:
+                        print(f"   ⚠️ Client linked but with different ID: {actual_id} vs {expected_client_id}")
+                        return True
+                else:
+                    print(f"   ❌ Client field is still empty!")
+                    return False
+        print(f"   ❌ Could not find Client field for verification")
+        return False
+    else:
+        print(f"   ❌ Verification request failed: {verify_res.status_code}")
+        return False
+
+def handle_order_client_linking(task_id):
+    """处理Order Record的客户链接 - 完整版本"""
+    print(f"🔗 Processing client linking for Order Record: {task_id}")
+    
+    res = safe_api_call(f"https://api.clickup.com/api/v2/task/{task_id}")
+    if res.status_code != 200:
+        print(f"❌ Failed to fetch order task: {res.status_code}")
+        return
+        
+    task = res.json()
+    fields = task.get("custom_fields", [])
+    
+    # 获取👤 Client Name字段值和👤 Client字段ID
+    client_name = None
+    client_field_id = None
+    
+    print("🔍 Searching for fields in Order Record:")
+    for field in fields:
+        field_name = field.get("name", "")
+        field_value = field.get("value")
+        field_id = field.get("id")
+        
+        if "👤 Client Name" == field_name:
+            client_name = field_value
+            print(f"📝 Found Client Name: {client_name}")
             
-    except Exception as e:
-        print(f"❌ 客户链接异常: {str(e)}")
+        elif "👤 Client" == field_name:
+            client_field_id = field_id
+            print(f"🆔 Found Client relationship field ID: {client_field_id}")
+    
+    if not client_name:
+        print("⏭️ No 👤 Client Name found in Order Record")
+        return
+        
+    if not client_field_id:
+        print("❌ 👤 Client relationship field not found in Order Record")
+        return
+    
+    print(f"🎯 Looking for client: '{client_name}' in Customer List")
+    
+    # 在Customer List中查找匹配的客户
+    CUSTOMER_LIST_ID = "901811834458"
+    
+    search_url = f"https://api.clickup.com/api/v2/list/{CUSTOMER_LIST_ID}/task"
+    params = {"archived": "false"}
+    search_res = safe_api_call(search_url, params=params)
+    
+    if search_res.status_code == 200:
+        customer_tasks = search_res.json().get("tasks", [])
+        print(f"🔍 Found {len(customer_tasks)} tasks in Customer List")
+        
+        # 精确匹配客户名称
+        matched_task = None
+        for customer_task in customer_tasks:
+            customer_name = customer_task.get("name", "").strip()
+            if customer_name.lower() == client_name.strip().lower():
+                matched_task = customer_task
+                print(f"✅ Exact match found: '{customer_name}' -> {customer_task.get('id')}")
+                break
+        
+        if matched_task:
+            client_task_id = matched_task.get("id")
+            
+            # 使用正确的关系字段API格式 - 完整版本
+            print("🔄 Using correct Relationship Field API format")
+            update_url = f"https://api.clickup.com/api/v2/task/{task_id}/field/{client_field_id}"
+            
+            payload = {
+                "value": {
+                    "add": [client_task_id],
+                    "rem": []
+                }
+            }
+            
+            # 关键：创建包含 Content-Type 的头部
+            headers_with_content = HEADERS.copy()
+            headers_with_content["Content-Type"] = "application/json"
+            
+            print(f"   URL: {update_url}")
+            print(f"   Payload: {json.dumps(payload, indent=2)}")
+            
+            try:
+                # 使用 requests 直接发送，而不是 safe_api_call，因为我们需要特定的 headers
+                update_res = requests.post(update_url, headers=headers_with_content, json=payload)
+                print(f"📡 API response status: {update_res.status_code}")
+                print(f"📡 API response content: {update_res.text}")
+                
+                # 记录 API 调用
+                with api_lock:
+                    api_call_timestamps.append(time.time())
+                
+                if update_res.status_code in (200, 201):
+                    print(f"✅ Relationship field updated successfully!")
+                    verify_relationship_update(task_id, client_field_id, client_task_id)
+                else:
+                    print(f"❌ Failed to update relationship field")
+            except Exception as e:
+                print(f"❌ Exception during update: {str(e)}")
+        else:
+            print(f"❌ No matching client found for: '{client_name}'")
+    else:
+        print(f"❌ Failed to search Customer List: {search_res.status_code}")
 
 @app.route("/clickup-webhook", methods=["POST"])
 def clickup_webhook():
