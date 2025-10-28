@@ -5,7 +5,7 @@ from dotenv import load_dotenv
 load_dotenv()
 
 CLICKUP_TOKEN = os.getenv("CLICKUP_TOKEN")
-WEBHOOK_ID = "a1f9bc1a-a96d-4b3c-809a-e29c50d6911a"
+WEBHOOK_ID = "63098f0f-d37b-4a27-b6cd-950ba927de93"
 
 url = f"https://api.clickup.com/api/v2/webhook/{WEBHOOK_ID}"
 headers = {
