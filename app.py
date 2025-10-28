@@ -3,8 +3,6 @@ import requests
 import os
 import json
 import time
-import threading
-import queue
 from datetime import datetime, timezone
 from dotenv import load_dotenv
 from collections import deque
@@ -358,38 +356,50 @@ def handle_order_client_linking(task_id):
     else:
         print(f"❌ Failed to search Customer List: {search_res.status_code}")
 
-# ### WORKER: 异步队列与后台 worker
-TASK_QUEUE_MAX = 2000
-task_queue = queue.Queue(maxsize=TASK_QUEUE_MAX)
-WORKER_COUNT = 1  # 可按需增加（注意共享 rate limiter）
+@app.route("/clickup-webhook", methods=["POST"])
+def clickup_webhook():
+    data = request.json
+    print("✅ Webhook received")
+    
+    # Extract task_id robustly
+    task_id = data.get("task_id") or (data.get("task") and data.get("task").get("id"))
+    if not task_id:
+        print("❌ No task_id found")
+        return jsonify({"error": "no task_id"}), 400
 
-def process_task_from_queue(task_id, data):
-    """
-    在 worker 中执行实际逻辑（fetch task, decide Customer vs OrderRecord, call calculate_all_intervals or handle_order_client_linking）
-    这个函数尽量复用之前的逻辑，同时在开始时检查 processed_tasks / last_date_signature 以防重复。
-    """
+    # Basic de-dup by time to prevent immediate duplicates
+    current_time = now_ts()
+    if task_id in processed_tasks:
+        last_time = processed_tasks[task_id]
+        if current_time - last_time < PROCESS_COOLDOWN:
+            print(f"⏭️ Skipping duplicate request for task {task_id} (cooldown)")
+            return jsonify({"ignored": "duplicate"}), 200
+    processed_tasks[task_id] = current_time
+
+    # Try to determine event type from payload (best-effort)
+    event = None
+    for key in ("event", "event_type", "hook_event", "webhook_event", "action"):
+        if key in data:
+            event = data.get(key)
+            break
+    event_str = str(event).lower() if event else ""
+
+    print(f"🎯 Processing task: {task_id}  (event: {event})")
+
     try:
-        # 再次短时去重（如果刚刚被处理过则跳过）
-        cur = now_ts()
-        if task_id in processed_tasks:
-            if cur - processed_tasks[task_id] < PROCESS_COOLDOWN:
-                print(f"⏭️ Worker skipping {task_id} due to recent processing cooldown")
-                return
-        # update processed time to avoid races
-        processed_tasks[task_id] = cur
-
         # Fetch full task JSON ONCE (we need fields to decide triggers)
         res = clickup_get(f"https://api.clickup.com/api/v2/task/{task_id}")
         if res.status_code != 200:
-            print(f"⚠️ Worker failed to fetch task details: {res.status_code}")
-            return
+            print(f"⚠️ Failed to fetch task details: {res.status_code}")
+            return jsonify({"error": "fetch_task_failed"}), 500
 
         task = res.json()
         list_id = task.get("list", {}).get("id")
-        print(f"▶ Worker processing task: {task_id} (list: {list_id})")
+        print(f"📁 List ID: {list_id}")
 
-        # -------- Customer List logic: only on date fields newly assigned ------
+        # -------- Customer List logic: only on taskUpdated when date fields changed/assigned ------
         if list_id == CUSTOMER_LIST_ID:
+            # Determine current date values (raw timestamp strings or None)
             fields = task.get("custom_fields", [])
             def get_field_value(name):
                 for f in fields:
@@ -409,8 +419,11 @@ def process_task_from_queue(task_id, data):
 
             prev_sig = last_date_signature.get(task_id)
 
+            # If prev_sig is None, treat prev as all None (so new non-empty dates are considered assigned)
+            # We ONLY proceed when at least one of the four date fields was newly set (prev None -> cur not None)
             newly_assigned = False
             if prev_sig is None:
+                # If this is first time we see the task, consider newly assigned any non-empty cur fields
                 newly_assigned = any([cur_sig[i] is not None for i in range(4)])
             else:
                 for i in range(4):
@@ -418,6 +431,8 @@ def process_task_from_queue(task_id, data):
                         newly_assigned = True
                         break
 
+            # But we must ensure that at least one pair exists to compute an interval:
+            # i.e., if only T1 exists (and nothing else), we should NOT act
             pair_exists = False
             if cur_sig[0] and cur_sig[1]:
                 pair_exists = True
@@ -427,99 +442,32 @@ def process_task_from_queue(task_id, data):
                 pair_exists = True
 
             if newly_assigned and pair_exists:
-                print(f"🔄 Worker: detected new date assignment AND at least one computable pair -> calculating intervals for {task_id}")
+                print("🔄 Detected new date assignment AND at least one computable pair -> calculating intervals")
+                # Calculate and write intervals (function will update last_date_signature)
                 calculate_all_intervals(task)
             else:
-                print(f"⏭️ Worker: no relevant date assignment or no computable pair -> skipping interval calc for {task_id}")
-                # still update signature to avoid repeatedly thinking it's new
+                print("⏭️ No relevant date assignment detected or no computable pair -> skipping interval calc")
+                # Update signature cache so we don't repeatedly treat same state as new (helps first-seen)
                 last_date_signature[task_id] = cur_sig
 
         # -------- Order Record logic: ONLY on taskCreated event (not on update) --------
         elif list_id == ORDER_RECORD_LIST_ID:
-            event = None
-            if isinstance(data, dict):
-                for key in ("event", "event_type", "hook_event", "webhook_event", "action"):
-                    if key in data:
-                        event = data.get(key)
-                        break
-            evt_str = str(event).lower() if event else ""
-            if "create" in evt_str or "taskcreated" in evt_str:
-                print(f"🆕 Worker: Order Record create event detected for {task_id} -> handle linking")
+            # Only perform linking when event indicates creation
+            # ClickUp event strings may vary; just check substring 'created' or exact 'taskCreated'
+            if "create" in event_str or "taskcreated" in event_str:
+                print("🆕 Processing as Order Record task (Client linking) - taskCreated event")
                 handle_order_client_linking(task_id)
             else:
-                print(f"⏭️ Worker: Order Record event is not creation -> skipping linking for {task_id}")
+                print("⏭️ Order Record event is not creation -> skipping linking")
 
         else:
-            print(f"❓ Worker: unknown list: {list_id} -> skipping")
+            print(f"❓ Unknown list: {list_id}, skipping")
     except Exception as e:
-        print(f"❌ Worker exception processing {task_id}: {e}")
+        print(f"⚠️ Exception while processing task: {e}")
         import traceback
         traceback.print_exc()
 
-def worker_loop(worker_id):
-    print(f"▶️ Worker {worker_id} started")
-    while True:
-        try:
-            item = task_queue.get()
-            if item is None:
-                print(f"◼ Worker {worker_id} received shutdown signal")
-                break
-            task_id, payload = item
-            try:
-                process_task_from_queue(task_id, payload)
-            except Exception as e:
-                print(f"❌ Worker {worker_id} failed to process {task_id}: {e}")
-            finally:
-                task_queue.task_done()
-        except Exception as e:
-            print(f"❌ Worker {worker_id} main loop exception: {e}")
-            time.sleep(1)
-
-# Start worker threads (daemon)
-worker_threads = []
-for i in range(WORKER_COUNT):
-    t = threading.Thread(target=worker_loop, args=(i+1,), daemon=True)
-    t.start()
-    worker_threads.append(t)
-
-# 最后，把 /clickup-webhook 改为仅入队并立即返回 200
-@app.route("/clickup-webhook", methods=["POST"])
-def clickup_webhook():
-    data = request.json
-    print("✅ Webhook received (enqueue mode)")
-
-    # Extract task_id robustly
-    task_id = data.get("task_id") or (data.get("task") and data.get("task").get("id"))
-    if not task_id:
-        print("❌ No task_id found in webhook payload")
-        return jsonify({"error": "no task_id"}), 400
-
-    # Basic de-dup by time to prevent immediate duplicates (quick filter before enqueue)
-    current_time = now_ts()
-    if task_id in processed_tasks:
-        last_time = processed_tasks[task_id]
-        if current_time - last_time < PROCESS_COOLDOWN:
-            print(f"⏭️ Skipping enqueue for duplicate task {task_id} (cooldown)")
-            return jsonify({"ignored": "duplicate"}), 200
-
-    # Try to enqueue quickly (non-blocking)
-    try:
-        try:
-            task_queue.put_nowait((task_id, data))
-            print(f"➕ Enqueued task {task_id} for async processing")
-            # mark processed_tasks time immediately to avoid duplicate enqueues
-            processed_tasks[task_id] = current_time
-        except queue.Full:
-            # Queue full — log and return 200 (optionally return 429 to force ClickUp retry)
-            print(f"❌ Task queue full, dropping task {task_id}")
-            # If you prefer ClickUp to retry, change status code to 429
-            return jsonify({"error": "queue_full"}), 200
-
-        # 立即回复 ClickUp，避免被判定为超时或失败
-        return jsonify({"accepted": True}), 200
-    except Exception as e:
-        print(f"❌ Failed to enqueue task {task_id}: {e}")
-        return jsonify({"error": "enqueue_failed"}), 500
+    return jsonify({"success": True}), 200
 
 @app.route("/")
 def home():
