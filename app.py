@@ -13,9 +13,8 @@ app = Flask(__name__)
 CLICKUP_TOKEN = os.getenv("CLICKUP_TOKEN")
 HEADERS = {"Authorization": CLICKUP_TOKEN}
 
-# 请求去重缓存
-processed_tasks = {}
-PROCESS_COOLDOWN = 3
+# 请求去重缓存 - 基于任务状态而非简单时间
+task_states = {}
 
 def parse_date(timestamp):
     return datetime.fromtimestamp(int(timestamp) / 1000, tz=timezone.utc)
@@ -50,7 +49,7 @@ def update_interval_field(task_id, field_name, interval_text):
         return False
 
 def calculate_all_intervals(task_id):
-    """计算所有日期间隔"""
+    """计算所有日期间隔 - 修复版本：确保取消日期时清空对应间隔"""
     res = requests.get(f"https://api.clickup.com/api/v2/task/{task_id}", headers=HEADERS)
     if res.status_code != 200:
         return
@@ -77,6 +76,19 @@ def calculate_all_intervals(task_id):
         elif "📅 T4 Date" in name:
             t4_date = value
     
+    # 获取当前任务状态
+    current_state = (t1_date, t2_date, t3_date, t4_date)
+    
+    # 检查状态是否变化 - 只有当日期状态真正变化时才处理
+    if task_id in task_states and task_states[task_id] == current_state:
+        print(f"⏭️ 任务状态未变化，跳过处理: {task_id}")
+        return False
+    
+    # 更新任务状态
+    task_states[task_id] = current_state
+    
+    print(f"🔄 计算间隔，日期状态: T1={t1_date}, T2={t2_date}, T3={t3_date}, T4={t4_date}")
+    
     # 计算 Interval 1-2
     if t1_date and t2_date:
         d1 = parse_date(t1_date)
@@ -84,8 +96,11 @@ def calculate_all_intervals(task_id):
         diff_seconds = (d2 - d1).total_seconds()
         if diff_seconds >= 0:
             interval_12 = format_diff(diff_seconds)
+            print(f"✅ 更新 Interval 1-2: {interval_12}")
             update_interval_field(task_id, "Interval 1-2", interval_12)
     else:
+        # 关键修复：当日期被取消时，确保清空间隔字段
+        print("🔄 清空 Interval 1-2")
         update_interval_field(task_id, "Interval 1-2", "")
     
     # 计算 Interval 2-3
@@ -95,8 +110,11 @@ def calculate_all_intervals(task_id):
         diff_seconds = (d3 - d2).total_seconds()
         if diff_seconds >= 0:
             interval_23 = format_diff(diff_seconds)
+            print(f"✅ 更新 Interval 2-3: {interval_23}")
             update_interval_field(task_id, "Interval 2-3", interval_23)
     else:
+        # 关键修复：当日期被取消时，确保清空间隔字段
+        print("🔄 清空 Interval 2-3")
         update_interval_field(task_id, "Interval 2-3", "")
     
     # 计算 Interval 3-4
@@ -106,9 +124,14 @@ def calculate_all_intervals(task_id):
         diff_seconds = (d4 - d3).total_seconds()
         if diff_seconds >= 0:
             interval_34 = format_diff(diff_seconds)
+            print(f"✅ 更新 Interval 3-4: {interval_34}")
             update_interval_field(task_id, "Interval 3-4", interval_34)
     else:
+        # 关键修复：当日期被取消时，确保清空间隔字段
+        print("🔄 清空 Interval 3-4")
         update_interval_field(task_id, "Interval 3-4", "")
+    
+    return True
 
 def verify_relationship_update(task_id, client_field_id, expected_client_id):
     """验证关系字段更新是否成功"""
@@ -202,7 +225,7 @@ def handle_order_client_linking(task_id):
         if matched_task:
             client_task_id = matched_task.get("id")
             
-            # 使用正确的关系字段API格式 - 保留所有关键部分
+            # 使用正确的关系字段API格式
             print("🔄 Using correct Relationship Field API format")
             update_url = f"https://api.clickup.com/api/v2/task/{task_id}/field/{client_field_id}"
             
@@ -213,7 +236,6 @@ def handle_order_client_linking(task_id):
                 }
             }
             
-            # 关键：保留Content-Type头部
             headers_with_content = HEADERS.copy()
             headers_with_content["Content-Type"] = "application/json"
             
@@ -246,16 +268,6 @@ def clickup_webhook():
     if not task_id:
         print("❌ No task_id found")
         return jsonify({"error": "no task_id"}), 400
-
-    # 去重检查
-    current_time = time.time()
-    if task_id in processed_tasks:
-        last_time = processed_tasks[task_id]
-        if current_time - last_time < PROCESS_COOLDOWN:
-            print(f"⏭️ Skipping duplicate request for task {task_id}")
-            return jsonify({"ignored": "duplicate"}), 200
-    
-    processed_tasks[task_id] = current_time
 
     print(f"🎯 Processing task: {task_id}")
     
