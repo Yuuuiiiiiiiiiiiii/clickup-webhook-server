@@ -22,7 +22,7 @@ api_lock = threading.Lock()
 webhook_timestamps = {}
 webhook_lock = threading.Lock()
 
-def safe_api_call(url, method='GET', json_data=None, max_retries=2):
+def safe_api_call(url, method='GET', json_data=None, params=None, max_retries=2):
     """安全的 API 调用，包含速率限制和重试"""
     global api_call_timestamps
     
@@ -52,7 +52,8 @@ def safe_api_call(url, method='GET', json_data=None, max_retries=2):
             if method == 'POST':
                 response = requests.post(url, headers=headers, json=json_data, timeout=10)
             else:
-                response = requests.get(url, headers=headers, timeout=10)
+                # 修复：正确处理 GET 请求的 params 参数
+                response = requests.get(url, headers=headers, params=params, timeout=10)
             
             # 记录成功的 API 调用
             with api_lock:
@@ -81,6 +82,7 @@ def safe_api_call(url, method='GET', json_data=None, max_retries=2):
                 raise
     
     return None
+
 
 def parse_date(timestamp):
     try:
