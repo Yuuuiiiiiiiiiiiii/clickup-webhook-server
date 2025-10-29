@@ -356,7 +356,7 @@ def clickup_webhook():
             if list_id == "901811834458":  # Customer List
                 print("🔄 处理客户列表任务")
                 calculate_all_intervals(task_id)
-            elif list_id == "901812062655" and event_type == 'taskCreated':  # Order Record
+            elif list_id == "901812062655":  # Order Record
                 print("🆕 处理订单记录任务")
                 handle_order_client_linking(task_id)
                 
